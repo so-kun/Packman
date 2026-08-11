@@ -31,8 +31,9 @@ export class Cutscene {
 
   draw() {
     const r = this.r, ctx = r.ctx;
+    // The coffee breaks play on an empty screen: the original clears the
+    // playfield and leaves only the score row and the counters at the edges.
     r.clear();
-    r.drawMaze(false);
     r.drawHud({ score: this.score, ...this.hud });
     const t = this.t;
     if (this.index === 1) this.drawCut1(ctx, r, t);
