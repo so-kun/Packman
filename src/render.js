@@ -191,18 +191,22 @@ function makeGhostBody(color, frame) {
   return cv;
 }
 
-// Eye: 4x4 white blob with clipped corners, 2x2 pupil offset by gaze.
+// Eye: measured off an arcade capture as a 4x5 white blob with clipped
+// corners starting 2px in and 3px down the body, with a 2x2 pupil that
+// shifts to the side the ghost is heading.
+const EYE = ['.##.', '####', '####', '####', '.##.'];
 const GAZE = { UP: [0, -1], DOWN: [0, 1], LEFT: [-1, 0], RIGHT: [1, 0] };
-const PUPIL = { UP: [1, 0], DOWN: [1, 2], LEFT: [0, 1], RIGHT: [2, 1] };
+const PUPIL = { UP: [1, 0], DOWN: [1, 3], LEFT: [0, 2], RIGHT: [2, 2] };
 
 function drawGhostEyes(ctx, dirName, ox = 1, oy = 1) {
   const gaze = GAZE[dirName] || [0, 0];
-  const pupil = PUPIL[dirName] || [1, 1];
+  const pupil = PUPIL[dirName] || [1, 2];
   for (const ex of [2, 8]) {
-    const wx = ox + ex + gaze[0], wy = oy + 4 + gaze[1];
+    const wx = ox + ex + gaze[0], wy = oy + 3 + gaze[1];
     ctx.fillStyle = COLORS.eyeWhite;
-    ctx.fillRect(wx + 1, wy, 2, 4);
-    ctx.fillRect(wx, wy + 1, 4, 2);
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 4; c++) if (EYE[r][c] === '#') ctx.fillRect(wx + c, wy + r, 1, 1);
+    }
     ctx.fillStyle = COLORS.pupil;
     ctx.fillRect(wx + pupil[0], wy + pupil[1], 2, 2);
   }
@@ -220,8 +224,8 @@ function makeFrightSprite(flash, frame) {
   const cv = makeGhostBody(body, frame);
   const ctx = cv.getContext('2d');
   ctx.fillStyle = face;
-  ctx.fillRect(1 + 3, 1 + 5, 2, 2);
-  ctx.fillRect(1 + 9, 1 + 5, 2, 2);
+  ctx.fillRect(1 + 3, 1 + 4, 2, 2);
+  ctx.fillRect(1 + 9, 1 + 4, 2, 2);
   // zig-zag mouth across the face
   for (let i = 0; i < 12; i++) {
     const up = (i % 4 === 1 || i % 4 === 2);
@@ -477,6 +481,21 @@ export class Renderer {
     };
     // How far the contour sits from the edge shared with this neighbour.
     const inset = (c, r) => (exterior(c, r) ? OUT : IN);
+    // Corner radius, clamped so two arcs at either end of a short run meet
+    // instead of crossing — without it the narrow walls beside the tunnel
+    // mouth grow a spur. A run only has to be shared when both of its ends
+    // actually turn; where one end continues into the next tile the arc may
+    // use the whole span, which keeps outer corners wider than the inner
+    // ones they wrap.
+    const cornerR = (c, r) => {
+      const oN = !isWall(c, r - 1), oS = !isWall(c, r + 1);
+      const oE = !isWall(c + 1, r), oW = !isWall(c - 1, r);
+      const hs = TILE - (oW ? inset(c - 1, r) : 0) - (oE ? inset(c + 1, r) : 0);
+      const vs = TILE - (oN ? inset(c, r - 1) : 0) - (oS ? inset(c, r + 1) : 0);
+      const rh = (oW && oE) ? hs / 2 : hs;
+      const rv = (oN && oS) ? vs / 2 : vs;
+      return Math.max(0.5, Math.min(R, rh, rv));
+    };
 
     // Straight runs along each open-facing side, trimmed where a corner arc
     // takes over.
@@ -488,6 +507,7 @@ export class Renderer {
         const oE = !isWall(c + 1, r), oW = !isWall(c - 1, r);
         const iN = inset(c, r - 1), iS = inset(c, r + 1);
         const iE = inset(c + 1, r), iW = inset(c - 1, r);
+        const R = cornerR(c, r);
         if (oN) {
           const a = oW ? x + iW + R : x, b = oE ? x + TILE - iE - R : x + TILE;
           if (b > a) { path.moveTo(a, y + iN); path.lineTo(b, y + iN); }
@@ -529,17 +549,21 @@ export class Renderer {
         // convex corner of a lone wall quadrant
         const convex = (which) => {
           if (which === 'se') {
-            const cx = x + inset(gc - 1, gr) + R, cy = y + inset(gc, gr - 1) + R;
-            arcSeg(cx, cy, R, Math.PI, 3 * HALF);
+            const rad = cornerR(gc, gr);
+            arcSeg(x + inset(gc - 1, gr) + rad, y + inset(gc, gr - 1) + rad,
+                   rad, Math.PI, 3 * HALF);
           } else if (which === 'sw') {
-            const cx = x - inset(gc, gr) - R, cy = y + inset(gc - 1, gr - 1) + R;
-            arcSeg(cx, cy, R, 3 * HALF, 4 * HALF);
+            const rad = cornerR(gc - 1, gr);
+            arcSeg(x - inset(gc, gr) - rad, y + inset(gc - 1, gr - 1) + rad,
+                   rad, 3 * HALF, 4 * HALF);
           } else if (which === 'ne') {
-            const cx = x + inset(gc - 1, gr - 1) + R, cy = y - inset(gc, gr) - R;
-            arcSeg(cx, cy, R, HALF, Math.PI);
+            const rad = cornerR(gc, gr - 1);
+            arcSeg(x + inset(gc - 1, gr - 1) + rad, y - inset(gc, gr) - rad,
+                   rad, HALF, Math.PI);
           } else {
-            const cx = x - inset(gc, gr - 1) - R, cy = y - inset(gc - 1, gr) - R;
-            arcSeg(cx, cy, R, 0, HALF);
+            const rad = cornerR(gc - 1, gr - 1);
+            arcSeg(x - inset(gc, gr - 1) - rad, y - inset(gc - 1, gr) - rad,
+                   rad, 0, HALF);
           }
         };
 
@@ -550,19 +574,16 @@ export class Renderer {
           else if (q.ne && q.sw) { convex('sw'); convex('ne'); }
           // adjacent pairs are a straight run — nothing to draw
         } else {
-          // three walls: arc around the single open quadrant
+          // Three walls: the contour rounds the open quadrant's corner, so the
+          // arc is centred on the vertex itself and bulges into the wall.
           if (!q.nw) {
-            const d = inset(gc - 1, gr - 1);
-            arcSeg(x + d, y + d, d, Math.PI, 3 * HALF);
+            arcSeg(x, y, inset(gc - 1, gr - 1), 0, HALF);
           } else if (!q.ne) {
-            const d = inset(gc, gr - 1);
-            arcSeg(x - d, y + d, d, 3 * HALF, 4 * HALF);
+            arcSeg(x, y, inset(gc, gr - 1), HALF, Math.PI);
           } else if (!q.sw) {
-            const d = inset(gc - 1, gr);
-            arcSeg(x + d, y - d, d, HALF, Math.PI);
+            arcSeg(x, y, inset(gc - 1, gr), 3 * HALF, 4 * HALF);
           } else {
-            const d = inset(gc, gr);
-            arcSeg(x - d, y - d, d, 0, HALF);
+            arcSeg(x, y, inset(gc, gr), Math.PI, 3 * HALF);
           }
         }
       }
@@ -622,7 +643,7 @@ export class Renderer {
         if (d === 1) {
           ctx.fillRect(c * TILE + 3, r * TILE + 3, 2, 2);
         } else if (d === 2 && blinkOn) {
-          disc(ctx, c * TILE + 4, r * TILE + 4, 3.6, COLORS.dot);
+          disc(ctx, c * TILE + 4, r * TILE + 4, 4, COLORS.dot);
         }
       }
     }
