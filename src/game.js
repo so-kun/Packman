@@ -23,6 +23,7 @@ import { demoDirection } from './demoai.js';
 const STATE = {
   BOOT: 'boot',
   ATTRACT: 'attract',
+  START_SCREEN: 'startScreen',
   READY: 'ready',
   PLAY: 'play',
   GHOST_EATEN: 'ghostEaten',
@@ -52,6 +53,7 @@ export class Game {
     this.audio = audio;
     this.highScore = Number(localStorage.getItem(HS_KEY) || 0);
     this.tick = 0;
+    this.credits = 0;
     this.toBoot();
   }
 
@@ -104,6 +106,38 @@ export class Game {
     this.ghosts = makeGhosts(this.maze);
     this.maze.reset();
     this.audio.setLoop('none');
+  }
+
+  // Coin in: bump the credit counter with the coin chime; outside of a game
+  // this brings up the PUSH START BUTTON screen, as on the real machine.
+  insertCoin() {
+    if (this.credits >= 99) return;
+    this.credits++;
+    this.audio.resume();
+    this.audio.suppressed = false;
+    this.audio.credit();
+    if (this.state === STATE.BOOT || this.state === STATE.ATTRACT ||
+        this.demoMode || this.state === STATE.GAME_OVER) {
+      this.toStartScreen();
+    }
+  }
+
+  toStartScreen() {
+    this.demoMode = false;
+    this.audio.suppressed = false;
+    this.state = STATE.START_SCREEN;
+    this.stateTimer = 0;
+    this.demo = null;
+    this.audio.setLoop('none');
+  }
+
+  // A start press only works with credit in the machine.
+  tryStart() {
+    if (this.credits <= 0) return false;
+    this.credits--;
+    this.audio.resume();
+    this.newGame();
+    return true;
   }
 
   // In-maze autoplay demo: real game rules, silent, one life, GAME OVER text.
@@ -172,9 +206,11 @@ export class Game {
   update() {
     this.tick++;
     if (this.input.consumeMute()) this.audio.toggleMute();
+    if (this.input.consumeCoin()) this.insertCoin();
     switch (this.state) {
       case STATE.BOOT: this.updateBoot(); break;
       case STATE.ATTRACT: this.updateAttract(); break;
+      case STATE.START_SCREEN: this.updateStartScreen(); break;
       case STATE.READY: this.updateReady(); break;
       case STATE.PLAY: this.updatePlay(); break;
       case STATE.GHOST_EATEN: this.updateGhostEaten(); break;
@@ -188,13 +224,15 @@ export class Game {
 
   updateBoot() {
     this.stateTimer++;
-    if (this.input.consumeStart()) {
-      this.audio.resume();
-      this.audio.credit();
-      this.newGame();
-      return;
-    }
-    if (this.stateTimer >= BOOT_TICKS) this.toAttract();
+    this.handleStartInputs();
+    if (this.stateTimer >= BOOT_TICKS && this.state === STATE.BOOT) this.toAttract();
+  }
+
+  // Start button behaves like the machine's: it only works with credit.
+  // A touch tap stands in for both coin slot and start button.
+  handleStartInputs() {
+    if (this.input.consumeStart()) this.tryStart();
+    if (this.input.consumeTap()) this.startOrCoin();
   }
 
   updateAttract() {
@@ -207,11 +245,17 @@ export class Game {
       this.startDemoPlay();
       return;
     }
-    if (this.input.consumeStart()) {
-      this.audio.resume();
-      this.audio.credit();
-      this.newGame();
-    }
+    this.handleStartInputs();
+  }
+
+  updateStartScreen() {
+    this.stateTimer++;
+    this.handleStartInputs();
+  }
+
+  // Tap fallback: start if there is credit, otherwise drop a coin in.
+  startOrCoin() {
+    if (!this.tryStart()) this.insertCoin();
   }
 
   // Attract-mode demo: the ghost train chases Pac leftward, he eats the
@@ -280,14 +324,9 @@ export class Game {
 
   updatePlay() {
     if (this.demoMode) {
-      // Pressing start during the demo begins a real game.
-      if (this.input.consumeStart()) {
-        this.audio.suppressed = false;
-        this.audio.resume();
-        this.audio.credit();
-        this.newGame();
-        return;
-      }
+      // Start (with credit) or a tap (as a coin) leaves the demo.
+      this.handleStartInputs();
+      if (!this.demoMode) return;
       if ((this.tick & 3) === 0) this.pac.setWant(demoDirection(this));
     } else if (this.input.dir) {
       this.pac.setWant(this.input.dir);
@@ -472,7 +511,12 @@ export class Game {
 
   updateGameOver() {
     this.stateTimer--;
-    if (this.stateTimer <= 0 || this.input.consumeStart()) this.toAttract();
+    this.handleStartInputs();
+    if (this.state !== STATE.GAME_OVER) return;
+    if (this.stateTimer <= 0) {
+      if (this.credits > 0) this.toStartScreen();
+      else this.toAttract();
+    }
   }
 
   // --- drawing ------------------------------------------------------------
@@ -482,6 +526,7 @@ export class Game {
     r.clear();
     if (this.state === STATE.BOOT) { this.drawBoot(); return; }
     if (this.state === STATE.ATTRACT) { this.drawAttract(); return; }
+    if (this.state === STATE.START_SCREEN) { this.drawStartScreen(); return; }
     if (this.state === STATE.CUTSCENE) { this.cutscene.draw(); return; }
 
     const flashing = this.state === STATE.LEVEL_DONE && this.stateTimer < T.LEVEL_FLASH;
@@ -496,8 +541,11 @@ export class Game {
       drawText(r.ctx, String(this.fruitScore.points), 12, 20, COLORS.pink);
     }
     // The autoplay demo runs under a standing GAME OVER banner, as on the
-    // real machine's attract loop.
-    if (this.demoMode) drawText(r.ctx, 'GAME  OVER', 9, 20, COLORS.red);
+    // real machine's attract loop, with the credit count in place of lives.
+    if (this.demoMode) {
+      drawText(r.ctx, 'GAME  OVER', 9, 20, COLORS.red);
+      this.drawCredits();
+    }
 
     switch (this.state) {
       case STATE.READY:
@@ -571,11 +619,24 @@ export class Game {
       drawText(ctx, '50 PTS', 11, 25, COLORS.text);
     }
     if (this.demo) this.drawDemo();
-    if ((this.tick % 60) < 40) {
-      drawText(ctx, 'PRESS START', 8, 29, COLORS.orange);
-    }
-    drawText(ctx, 'A TRIBUTE TO THE 1980', 3, 31, COLORS.pink);
-    drawText(ctx, 'NAMCO ARCADE ORIGINAL', 3, 32, COLORS.pink);
+    // Historical notice as on the original attract screen (plain text; see
+    // README — this project is an unaffiliated tribute).
+    drawText(ctx, '@ 1980 NAMCO', 8, 29, COLORS.pink);
+    this.drawCredits();
+  }
+
+  drawCredits() {
+    drawText(this.renderer.ctx, `CREDIT  ${this.credits}`, 2, 35, COLORS.text);
+  }
+
+  drawStartScreen() {
+    const r = this.renderer, ctx = r.ctx;
+    r.drawHud(this);
+    drawText(ctx, 'PUSH START BUTTON', 6, 11, COLORS.orange);
+    drawText(ctx, '1 PLAYER ONLY', 8, 15, COLORS.cyan);
+    drawText(ctx, 'BONUS PACKMAN FOR 10000 PTS', 1, 19, COLORS.peach);
+    drawText(ctx, '@ 1980 NAMCO', 8, 25, COLORS.pink);
+    this.drawCredits();
   }
 
   drawBoot() {

@@ -6,14 +6,16 @@ export class Input {
   constructor(target = window) {
     this.dir = null;        // last requested direction
     this.startPressed = false;
+    this.coinPressed = false;
     this.mutePressed = false;
     target.addEventListener('keydown', (e) => this.onKey(e), { passive: false });
-    // touch swipe
+    // touch swipe; a plain tap doubles as coin slot + start button
+    this.tapPressed = false;
     let sx = 0, sy = 0, active = false;
     target.addEventListener('touchstart', (e) => {
       const t = e.changedTouches[0];
       sx = t.clientX; sy = t.clientY; active = true;
-      this.startPressed = true;
+      this.tapPressed = true;
     }, { passive: true });
     target.addEventListener('touchmove', (e) => {
       if (!active) return;
@@ -34,6 +36,7 @@ export class Input {
       case 'ArrowLeft': case 'a': case 'A': this.dir = DIR.LEFT; break;
       case 'ArrowRight': case 'd': case 'D': this.dir = DIR.RIGHT; break;
       case 'Enter': case ' ': this.startPressed = true; break;
+      case '5': case 'c': case 'C': this.coinPressed = true; break;
       case 'm': case 'M': this.mutePressed = true; break;
       default: return;
     }
@@ -43,6 +46,18 @@ export class Input {
   consumeStart() {
     const v = this.startPressed;
     this.startPressed = false;
+    return v;
+  }
+
+  consumeCoin() {
+    const v = this.coinPressed;
+    this.coinPressed = false;
+    return v;
+  }
+
+  consumeTap() {
+    const v = this.tapPressed;
+    this.tapPressed = false;
     return v;
   }
 
