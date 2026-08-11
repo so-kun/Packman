@@ -43,6 +43,73 @@ const ASCII = [
   '############################',
 ];
 
+// The same maze as the board draws it, one background-ROM tile code per cell.
+// The arcade builds its playfield from a tile set with pre-drawn corners and
+// junctions rather than from generic wall blocks, so the double-line outline
+// and its rounded corners come out of the artwork instead of being traced.
+//
+// Each letter below names one tile of that set (the mapping is the game's own,
+// recovered from video RAM). Dots and energizers are drawn separately from the
+// live dot grid, so their cells are left blank here.
+const TILE_ASCII = [
+  '0UUUUUUUUUUUU45UUUUUUUUUUUU1',
+  'L............rl............R',
+  'L.ebbf.ebbbf.rl.ebbbf.ebbf.R',
+  'LPr  l.r   l.rl.r   l.r  lPR',
+  'L.guuh.guuuh.gh.guuuh.guuh.R',
+  'L..........................R',
+  'L.ebbf.ef.ebbbbbbf.ef.ebbf.R',
+  'L.guuh.rl.guuyxuuh.rl.guuh.R',
+  'L......rl....rl....rl......R',
+  '2BBBBf.rzbbf rl ebbwl.eBBBB3',
+  '     L.rxuuh gh guuyl.R     ',
+  '     L.rl          rl.R     ',
+  '     L.rl mjs--tjn rl.R     ',
+  'UUUUUh.gh i      q gh.gUUUUU',
+  '      .   i      q   .      ',
+  'BBBBBf.ef i      q ef.eBBBBB',
+  '     L.rl okkkkkkp rl.R     ',
+  '     L.rl          rl.R     ',
+  '     L.rl ebbbbbbf rl.R     ',
+  '0UUUUh.gh guuyxuuh gh.gUUUU1',
+  'L............rl............R',
+  'L.ebbf.ebbbf.rl.ebbbf.ebbf.R',
+  'L.guyl.guuuh.gh.guuuh.rxuh.R',
+  'LP..rl.......  .......rl..PR',
+  '6bf.rl.ef.ebbbbbbf.ef.rl.eb8',
+  '7uh.gh.rl.guuyxuuh.rl.gh.gu9',
+  'L......rl....rl....rl......R',
+  'L.ebbbbwzbbf.rl.ebbwzbbbbf.R',
+  'L.guuuuuuuuh.gh.guuuuuuuuh.R',
+  'L..........................R',
+  '2BBBBBBBBBBBBBBBBBBBBBBBBBB3',
+];
+
+const TILE_FOR_CHAR = {
+  '0': 0xd1, '1': 0xd0, '2': 0xd5, '3': 0xd4, '4': 0xfb, '5': 0xfa,
+  '6': 0xd7, '7': 0xd9, '8': 0xd6, '9': 0xd8,
+  U: 0xdb, L: 0xd3, R: 0xd2, B: 0xdc, b: 0xdf,
+  e: 0xe7, f: 0xe6, g: 0xeb, h: 0xea, l: 0xe8, r: 0xe9, u: 0xe5,
+  w: 0xf5, x: 0xf2, y: 0xf3, z: 0xf4,
+  m: 0xed, n: 0xec, o: 0xef, p: 0xee, j: 0xdd,
+  i: 0xd2, k: 0xdb, q: 0xd3, s: 0xf1, t: 0xf0,
+  '-': 0xcf,  // ghost-house door
+};
+const BLANK_TILE = 0x40;
+
+/** Background tile code per screen cell; 0x40 (blank) outside the maze. */
+export const MAZE_TILES = (() => {
+  const grid = [];
+  for (let r = 0; r < ROWS; r++) grid.push(new Array(COLS).fill(BLANK_TILE));
+  for (let i = 0; i < TILE_ASCII.length; i++) {
+    for (let c = 0; c < COLS; c++) {
+      const code = TILE_FOR_CHAR[TILE_ASCII[i][c]];
+      if (code !== undefined) grid[i + MAZE_TOP][c] = code;
+    }
+  }
+  return grid;
+})();
+
 // Junction tiles where ghosts may not choose to turn upward (chase/scatter
 // only): in the corridor above the ghost house and on Pac's home row. These
 // must be the junction tiles themselves — one row further up are plain

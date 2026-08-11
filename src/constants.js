@@ -1,7 +1,9 @@
 // Game constants and per-level data tables.
 // Values follow the publicly documented behavior of the 1980 arcade original
-// (see README.md for sources). All code and data here are original work —
-// no ROM-derived data is used.
+// (see README.md for sources). The colours below are read from the board's
+// palette PROM; everything else here is written from the published tables.
+
+import { cssColor, COLOR_CODE } from './rom.js';
 
 export const TILE = 8;
 export const COLS = 28;
@@ -121,26 +123,30 @@ export const T = {
   FRUIT_SCORE: 120,
 };
 
+// Colours are read out of the board's palette PROM rather than named here, so
+// every one of them is a colour the hardware can actually produce. The pen
+// numbers are which of a colour code's four entries is wanted: pen 0 is always
+// transparent, and the remaining three are what a tile or sprite draws with.
 export const COLORS = {
-  wall: '#2121ff',
-  door: '#ffb8de',
-  dot: '#ffb8ae',
-  pac: '#ffff00',
-  blinky: '#ff0000',
-  pinky: '#ffb8ff',
-  inky: '#00ffff',
-  clyde: '#ffb852',
-  frightBody: '#2121de',
-  frightFace: '#dedede',
-  flashBody: '#dedede',
-  flashFace: '#ff0000',
-  eyeWhite: '#dedede',
-  pupil: '#2121de',
-  text: '#dedede',
-  red: '#ff0000',
-  cyan: '#00ffff',
-  orange: '#ffb852',
-  pink: '#ffb8ff',
-  yellow: '#ffff00',
-  peach: '#ffb8ae',
+  wall: cssColor(COLOR_CODE.DOT, 3),
+  door: cssColor(COLOR_CODE.PINKY, 3),
+  dot: cssColor(COLOR_CODE.DOT, 1),
+  pac: cssColor(COLOR_CODE.PACMAN, 3),
+  blinky: cssColor(COLOR_CODE.BLINKY, 3),
+  pinky: cssColor(COLOR_CODE.PINKY, 3),
+  inky: cssColor(COLOR_CODE.INKY, 3),
+  clyde: cssColor(COLOR_CODE.CLYDE, 3),
+  frightBody: cssColor(COLOR_CODE.FRIGHTENED, 2),
+  frightFace: cssColor(COLOR_CODE.FRIGHTENED, 3),
+  flashBody: cssColor(COLOR_CODE.FRIGHTENED_BLINKING, 2),
+  flashFace: cssColor(COLOR_CODE.FRIGHTENED_BLINKING, 3),
+  eyeWhite: cssColor(COLOR_CODE.EYES, 1),
+  pupil: cssColor(COLOR_CODE.EYES, 2),
+  text: cssColor(COLOR_CODE.DEFAULT, 3),
+  red: cssColor(COLOR_CODE.BLINKY, 3),
+  cyan: cssColor(COLOR_CODE.INKY, 3),
+  orange: cssColor(COLOR_CODE.CLYDE, 3),
+  pink: cssColor(COLOR_CODE.PINKY, 3),
+  yellow: cssColor(COLOR_CODE.PACMAN, 3),
+  peach: cssColor(COLOR_CODE.DOT, 1),
 };
