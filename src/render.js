@@ -139,6 +139,15 @@ export function drawRomTile(ctx, code, colorCode, col, row) {
   ctx.drawImage(cv, col * TILE, row * TILE);
 }
 
+// The maker's wordmark is its own run of tiles rather than text: seven tiles
+// carrying a proportionally spaced lowercase "namco", so the letters straddle
+// tile boundaries and cannot be assembled from the text font.
+const NAMCO_TILES = [0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e];
+
+export function drawNamco(ctx, tx, ty, colorCode = COLOR_CODE.PINKY) {
+  NAMCO_TILES.forEach((code, i) => drawRomTile(ctx, code, colorCode, tx + i, ty));
+}
+
 // ---------------------------------------------------------------------------
 
 const DIRS = ['RIGHT', 'DOWN', 'LEFT', 'UP'];

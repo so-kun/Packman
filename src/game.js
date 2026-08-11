@@ -13,7 +13,7 @@ import { Pac } from './actors.js';
 import {
   makeGhosts, HouseController, MODE, GSTATE, updateElroy, seedRng,
 } from './ghosts.js';
-import { Renderer, drawText, drawSmallText } from './render.js';
+import { Renderer, drawText, drawSmallText, drawNamco } from './render.js';
 import {
   isKillScreen, HIDDEN_DOTS, drawKillScreenGarbage, drawGarbageTiles,
 } from './killscreen.js';
@@ -625,7 +625,8 @@ export class Game {
       drawSmallText(ctx, 'PTS', 15 * TILE, 27 * TILE + 3, COLORS.text);
     }
     if (this.demo) this.drawDemo();
-    drawText(ctx, 'NAMCO', 11, 31, COLORS.pink);
+    // Seven tiles wide, so it centres one tile left of where text would start.
+    drawNamco(ctx, 10, 31);
     this.drawCredits();
   }
 

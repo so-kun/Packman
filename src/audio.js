@@ -21,8 +21,20 @@ const WSG_CLOCK = 96000;          // accumulator updates per second
 const ACC_BITS = 20;              // one waveform cycle per full accumulator wrap
 const OVERSAMPLE = 4;
 
-/** Frequency register value for a pitch in Hz — only used by the guessed sounds. */
-const REG = (hz) => Math.round((hz * (1 << ACC_BITS)) / WSG_CLOCK);
+/**
+ * How many cycles each of the eight ROM waveforms completes inside its 32
+ * samples. Four of them are not single-cycle, so the pitch heard is a multiple
+ * of what the frequency register would suggest — waveform 5 sounds fifteen
+ * times higher than its register value reads. The original's own routines pick
+ * register values that already account for this; anything written here has to
+ * divide by it. `test/audio.test.mjs` re-derives this table from the ROM.
+ */
+export const WAVEFORM_CYCLES = [1, 1, 2, 1, 8, 15, 1, 2];
+
+/** Frequency register that makes `waveform` sound at `hz`. */
+const REG = (hz, waveform) => Math.round(
+  (hz * (1 << ACC_BITS)) / (WSG_CLOCK * WAVEFORM_CYCLES[waveform]),
+);
 
 // ---------------------------------------------------------------------------
 // Per-tick register programs
@@ -93,8 +105,8 @@ function progFrightened() {
 function progEyes() {
   const out = [];
   for (let t = 0; t < 16; t++) {
-    const f = t < 8 ? REG(1000) + t * REG(60) : REG(1420) - (t - 8) * REG(60);
-    out.push({ f, w: 6, v: 5 });
+    const hz = t < 8 ? 1000 + t * 60 : 1420 - (t - 8) * 60;
+    out.push({ f: REG(hz, 6), w: 6, v: 5 });
   }
   return out;
 }
@@ -103,7 +115,7 @@ function progEyes() {
 function progEatEnergizer() {
   const out = [];
   for (let t = 0; t < 26; t++) {
-    out.push({ f: REG(90 + t * 62), w: 4, v: Math.max(4, 14 - (t >> 2)) });
+    out.push({ f: REG(90 + t * 62, 4), w: 4, v: Math.max(4, 14 - (t >> 2)) });
   }
   return out;
 }
@@ -112,17 +124,30 @@ function progEatEnergizer() {
 function progExtraLife() {
   const out = [];
   for (let i = 0; i < 9; i++) {
-    for (let t = 0; t < 5; t++) out.push({ f: REG(1400 - t * 100), w: 6, v: 10 });
+    for (let t = 0; t < 5; t++) out.push({ f: REG(1400 - t * 100, 6), w: 6, v: 10 });
     for (let t = 0; t < 3; t++) out.push({ f: 0, w: 6, v: 0 });
   }
   return out;
 }
 
-/** Coin insert. */
+/**
+ * Coin insert. Measured off a recording of the machine rather than guessed: a
+ * V that falls from about 633 Hz to 76 Hz over six ticks and climbs back past
+ * its start to about 856 Hz over eight, stepping by a constant register
+ * amount throughout. Waveform 2 matches the recording's harmonic ratios
+ * closely (0.17 away against 0.49 for the next candidate), and being a
+ * two-cycle waveform it sounds an octave above its register value.
+ * `tools/measure-sound.mjs` produces both measurements.
+ */
 function progCredit() {
+  const START = 0x0d80;
+  const STEP = 0x0260;
   const out = [];
-  for (let t = 0; t < 3; t++) out.push({ f: REG(600), w: 2, v: 13 });
-  for (let t = 0; t < 7; t++) out.push({ f: REG(1000), w: 2, v: 13 - t });
+  let f = START;
+  for (let t = 0; t < 6; t++) { out.push({ f, w: 2, v: 12 }); f -= STEP; }
+  // The recording sits on the bottom for one extra tick before turning round.
+  f += STEP;
+  for (let t = 0; t < 8; t++) { out.push({ f, w: 2, v: 12 }); f += STEP; }
   return out;
 }
 
@@ -132,7 +157,7 @@ function progCredit() {
 // sound for four of them, and the bass moves half as often, two beats low to
 // one high so its median sits on the low note.
 const STEP = 5, GATE = 4;
-const NOTE_REG = (semi) => REG(440 * Math.pow(2, semi / 12));
+const NOTE_REG = (semi, waveform) => REG(440 * Math.pow(2, semi / 12), waveform);
 
 function tuneVoice(notes, waveform, volume) {
   const out = [];
@@ -141,7 +166,7 @@ function tuneVoice(notes, waveform, volume) {
     for (let t = 0; t < ticks; t++) {
       const sounding = semi !== null && t < ticks - (STEP - GATE);
       out.push(sounding
-        ? { f: NOTE_REG(semi), w: waveform, v: volume }
+        ? { f: NOTE_REG(semi, waveform), w: waveform, v: volume }
         : { f: 0, w: waveform, v: 0 });
     }
   }
@@ -154,7 +179,7 @@ function bassVoice(totalTicks, low, high, waveform, volume) {
     const semi = i % 3 === 2 ? high : low;
     for (let t = 0; t < 2 * STEP; t++) {
       out.push(t < 2 * STEP - 2
-        ? { f: NOTE_REG(semi), w: waveform, v: volume }
+        ? { f: NOTE_REG(semi, waveform), w: waveform, v: volume }
         : { f: 0, w: waveform, v: 0 });
     }
   }
@@ -232,6 +257,26 @@ export function renderProgram(voicePrograms, sampleRate) {
   return out;
 }
 
+/**
+ * Every sound as a list of per-tick register programs, one per voice. Shared
+ * with the tools and tests so a change here cannot drift from what is measured
+ * or listened to. The siren is not here because it is per-stage.
+ */
+export const SOUND_PROGRAMS = {
+  prelude: () => unpackDump(SND_PRELUDE, 2),
+  death: () => unpackDump(SND_DEAD, 1),
+  intermission: () => progIntermission(),
+  wakaUp: () => [progEatDot(true)],
+  wakaDown: () => [progEatDot(false)],
+  eatGhost: () => [progEatGhost()],
+  eatFruit: () => [progEatFruit()],
+  eatEnergizer: () => [progEatEnergizer()],
+  extraLife: () => [progExtraLife()],
+  credit: () => [progCredit()],
+  fright: () => [progFrightened()],
+  eyes: () => [progEyes()],
+};
+
 // ---------------------------------------------------------------------------
 
 export class AudioEngine {
@@ -275,10 +320,10 @@ export class AudioEngine {
     return buf;
   }
 
-  play(name, build) {
+  play(name) {
     if (!this.live) return;
     const src = this.ctx.createBufferSource();
-    src.buffer = this.buffer(name, build);
+    src.buffer = this.buffer(name, SOUND_PROGRAMS[name]);
     src.connect(this.master);
     src.start();
   }
@@ -310,8 +355,7 @@ export class AudioEngine {
     this.stopLoop();
     let buf = null;
     if (mode === 'siren') buf = this.buffer(`siren${sirenLevel}`, () => [progSiren(sirenLevel)]);
-    else if (mode === 'fright') buf = this.buffer('fright', () => [progFrightened()]);
-    else if (mode === 'eyes') buf = this.buffer('eyes', () => [progEyes()]);
+    else if (mode === 'fright' || mode === 'eyes') buf = this.buffer(mode, SOUND_PROGRAMS[mode]);
     if (!buf) return;
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
@@ -330,16 +374,15 @@ export class AudioEngine {
   waka() {
     if (!this.live) return;
     this.wakaFlip = !this.wakaFlip;
-    const rising = this.wakaFlip;
-    this.play(rising ? 'wakaUp' : 'wakaDown', () => [progEatDot(rising)]);
+    this.play(this.wakaFlip ? 'wakaUp' : 'wakaDown');
   }
 
-  eatGhost() { this.play('eatGhost', () => [progEatGhost()]); }
-  eatEnergizer() { this.play('eatEnergizer', () => [progEatEnergizer()]); }
-  eatFruit() { this.play('eatFruit', () => [progEatFruit()]); }
-  extraLife() { this.play('extraLife', () => [progExtraLife()]); }
-  credit() { this.play('credit', () => [progCredit()]); }
-  death() { this.play('death', () => unpackDump(SND_DEAD, 1)); }
-  intro() { this.play('prelude', () => unpackDump(SND_PRELUDE, 2)); }
-  intermission() { this.play('intermission', () => progIntermission()); }
+  eatGhost() { this.play('eatGhost'); }
+  eatEnergizer() { this.play('eatEnergizer'); }
+  eatFruit() { this.play('eatFruit'); }
+  extraLife() { this.play('extraLife'); }
+  credit() { this.play('credit'); }
+  death() { this.play('death'); }
+  intro() { this.play('prelude'); }
+  intermission() { this.play('intermission'); }
 }

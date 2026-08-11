@@ -7,7 +7,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderProgram, unpackDump, progSiren } from '../src/audio.js';
+import {
+  renderProgram, unpackDump, progSiren, SOUND_PROGRAMS, WAVEFORM_CYCLES,
+} from '../src/audio.js';
 import { WAVETABLE, SND_PRELUDE, SND_DEAD } from '../src/romdata.js';
 
 const SAMPLE_RATE = 48000;
@@ -88,6 +90,47 @@ test('the siren cycle closes on itself so its buffer can loop', () => {
       assert.ok(s.f > 0 && s.f < (1 << 20), `stage ${stage} frequency ${s.f} out of range`);
     }
   }
+});
+
+test('the waveform period table matches what is actually in the ROM', () => {
+  // Half the waveforms complete more than one cycle inside their 32 samples,
+  // so the pitch heard is a multiple of the frequency register. Getting this
+  // wrong sounds like a working effect at the wrong octave, which is exactly
+  // the kind of mistake that survives casual listening — so derive it from the
+  // ROM here rather than trusting the constant.
+  for (let w = 0; w < 8; w++) {
+    let bestBin = 1;
+    let best = 0;
+    for (let k = 1; k < 16; k++) {
+      let re = 0;
+      let im = 0;
+      for (let i = 0; i < 32; i++) {
+        const sample = (WAVETABLE[(w << 5) | i] & 0x0f) - 8;
+        re += sample * Math.cos((-2 * Math.PI * k * i) / 32);
+        im += sample * Math.sin((-2 * Math.PI * k * i) / 32);
+      }
+      const mag = Math.hypot(re, im);
+      if (mag > best) { best = mag; bestBin = k; }
+    }
+    assert.equal(WAVEFORM_CYCLES[w], bestBin,
+      `waveform ${w} completes ${bestBin} cycles per table, not ${WAVEFORM_CYCLES[w]}`);
+  }
+});
+
+test('the coin sound is the measured V, not a flat beep', () => {
+  const [prog] = SOUND_PROGRAMS.credit();
+  assert.equal(prog.length, 14);
+  const hz = prog.map((s) => (s.f * 96000 * WAVEFORM_CYCLES[s.w]) / (1 << 20));
+  // Falls for six ticks, sits on the bottom for one, then rises past where it
+  // began — the shape measured off the recording.
+  const bottom = hz.indexOf(Math.min(...hz));
+  assert.equal(bottom, 5);
+  for (let i = 1; i <= bottom; i++) assert.ok(hz[i] < hz[i - 1], `tick ${i} should fall`);
+  assert.equal(hz[6], hz[5], 'the bottom is held for one tick');
+  for (let i = 7; i < hz.length; i++) assert.ok(hz[i] > hz[i - 1], `tick ${i} should rise`);
+  assert.ok(Math.abs(hz[0] - 633) < 15, `starts at ${hz[0].toFixed(0)} Hz`);
+  assert.ok(Math.abs(hz[bottom] - 76) < 15, `bottoms at ${hz[bottom].toFixed(0)} Hz`);
+  assert.ok(Math.abs(hz[hz.length - 1] - 856) < 20, `ends at ${hz[hz.length - 1].toFixed(0)} Hz`);
 });
 
 test('the waveform index wraps within one waveform', () => {
