@@ -32,11 +32,6 @@ const OVERSAMPLE = 4;
  */
 export const WAVEFORM_CYCLES = [1, 1, 2, 1, 8, 15, 1, 2];
 
-/** Frequency register that makes `waveform` sound at `hz`. */
-const REG = (hz, waveform) => Math.round(
-  (hz * (1 << ACC_BITS)) / (WSG_CLOCK * WAVEFORM_CYCLES[waveform]),
-);
-
 // ---------------------------------------------------------------------------
 // Per-tick register programs
 //
@@ -74,19 +69,32 @@ function progEatFruit() {
 }
 
 /**
- * The siren. The original's cycle is 24 ticks — twelve up, twelve down — which
- * makes the buffer loop exactly. Stage 0 is the board's own values; the later
- * stages raise the base pitch and the step, which is the part still tuned by
- * ear (the original speeds the siren up as the board empties).
+ * The siren, measured from recordings of all five stages. As the board empties
+ * it both climbs and hurries: the half-period shortens by a tick per stage
+ * while the per-tick step grows by exactly 0x80, which is regular enough to be
+ * the board's own scheme rather than a coincidence.
+ *
+ *   stage  bottom   step   half-period   measured range
+ *     0    0x1080  0x0200      12          386 - 928 Hz
+ *     1    0x14B0  0x0280      11          485 - 1099
+ *     2    0x18A0  0x0300      10          577 - 1247
+ *     3    0x1E80  0x0380       9          716 - 1431
+ *     4    0x2480  0x0400       8          855 - 1582
+ *
+ * Rising then falling over 2x the half-period returns to the start, so the
+ * rendered buffer loops without a seam.
  */
+const SIREN_BOTTOM = [0x1080, 0x14b0, 0x18a0, 0x1e80, 0x2480];
+
 export function progSiren(stage) {
-  const base = 0x1000 + stage * 0x0300;
-  const step = 0x0200 + stage * 0x0060;
+  const s = Math.max(0, Math.min(4, stage));
+  const bottom = SIREN_BOTTOM[s];
+  const step = 0x0200 + s * 0x0080;
+  const half = 12 - s;
   const out = [];
-  let f = base;
-  for (let t = 0; t < 24; t++) {
-    out.push({ f, w: 6, v: 6 });
-    f += (t % 24) < 11 ? step : -step;
+  for (let t = 0; t < half * 2; t++) {
+    const rise = t < half ? t : half * 2 - t;
+    out.push({ f: bottom + step * rise, w: 6, v: 6 });
   }
   return out;
 }
@@ -119,21 +127,15 @@ function progEyes() {
   return out;
 }
 
-/** Swallowing an energizer: one long rise before the frightened loop starts. */
-function progEatEnergizer() {
-  const out = [];
-  for (let t = 0; t < 26; t++) {
-    out.push({ f: REG(90 + t * 62, 4), w: 4, v: Math.max(4, 14 - (t >> 2)) });
-  }
-  return out;
-}
-
-/** The extend fanfare at 10000 points. */
+/**
+ * The extend fanfare at 10000 points. Measured: one pitch throughout, about
+ * 374 Hz on waveform 3, struck every twelve ticks and decaying between
+ * strikes — a repeated blip rather than a tune.
+ */
 function progExtraLife() {
   const out = [];
   for (let i = 0; i < 9; i++) {
-    for (let t = 0; t < 5; t++) out.push({ f: REG(1400 - t * 100, 6), w: 6, v: 10 });
-    for (let t = 0; t < 3; t++) out.push({ f: 0, w: 6, v: 0 });
+    for (let t = 0; t < 12; t++) out.push({ f: 0x1000, w: 3, v: 15 - t });
   }
   return out;
 }
@@ -247,7 +249,6 @@ export const SOUND_PROGRAMS = {
   wakaDown: () => [progEatDot(false)],
   eatGhost: () => [progEatGhost()],
   eatFruit: () => [progEatFruit()],
-  eatEnergizer: () => [progEatEnergizer()],
   extraLife: () => [progExtraLife()],
   credit: () => [progCredit()],
   fright: () => [progFrightened()],
@@ -355,7 +356,6 @@ export class AudioEngine {
   }
 
   eatGhost() { this.play('eatGhost'); }
-  eatEnergizer() { this.play('eatEnergizer'); }
   eatFruit() { this.play('eatFruit'); }
   extraLife() { this.play('extraLife'); }
   credit() { this.play('credit'); }
