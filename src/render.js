@@ -1,10 +1,10 @@
 // Rendering: procedurally generated pixel sprites (all original artwork),
-// a rounded-outline wall renderer, an 8x8 bitmap font, and the HUD.
+// morphologically derived maze outlines, an 8x8 bitmap font, and the HUD.
 
 import {
   TILE, COLS, ROWS, WIDTH, HEIGHT, COLORS, fruitForLevel,
 } from './constants.js';
-import { MAZE_TOP, DOOR_TILES } from './maze.js';
+import { MAZE_TOP, DOOR_TILES, TUNNEL_ROW } from './maze.js';
 import { GSTATE } from './ghosts.js';
 
 // ---------------------------------------------------------------------------
@@ -53,7 +53,10 @@ const FONT = {
   '"': [0x0a, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00],
   ',': [0x00, 0x00, 0x00, 0x00, 0x0c, 0x04, 0x08],
   ':': [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x0c, 0x00],
-  '@': [0x0e, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0e], // used as (c) mark
+  '(': [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+  ')': [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+  // copyright mark
+  '@': [0x0e, 0x11, 0x17, 0x14, 0x17, 0x11, 0x0e],
   ' ': [0, 0, 0, 0, 0, 0, 0],
 };
 
@@ -73,7 +76,7 @@ export function drawText(ctx, text, tx, ty, color) {
 }
 
 // ---------------------------------------------------------------------------
-// Sprite factory helpers
+// Pixel drawing helpers
 
 function makeCanvas(w, h) {
   const c = document.createElement('canvas');
@@ -83,21 +86,45 @@ function makeCanvas(w, h) {
 
 function px(ctx, x, y, color) { ctx.fillStyle = color; ctx.fillRect(x, y, 1, 1); }
 
-// Pac body: 13px disc with a mouth wedge. dirAngle in radians, mouthHalf in
-// radians (0 = closed). size 16x16, centered.
+// Pixel-quantized filled circle — keeps edges crisp at sprite scale.
+function disc(ctx, cx, cy, r, color) {
+  ctx.fillStyle = color;
+  const r2 = r * r;
+  for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+    for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+      const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
+      if (dx * dx + dy * dy <= r2) ctx.fillRect(x, y, 1, 1);
+    }
+  }
+}
+
+function pxs(ctx, list, color) {
+  ctx.fillStyle = color;
+  for (const [x, y] of list) ctx.fillRect(x, y, 1, 1);
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// ---------------------------------------------------------------------------
+// Pac sprites: a 13px disc with a mouth wedge, in a 16x16 cell.
+
 function makePacSprite(dirAngle, mouthHalf, scale = 1) {
   const s = 16 * scale;
   const cv = makeCanvas(s, s);
   const ctx = cv.getContext('2d');
-  const cx = s / 2 - 0.5, cy = s / 2 - 0.5, r = 6.6 * scale;
+  const cx = s / 2, cy = s / 2, r = 6.7 * scale;
   for (let y = 0; y < s; y++) {
     for (let x = 0; x < s; x++) {
-      const dx = x - cx, dy = y - cy;
+      const dx = x + 0.5 - cx, dy = y + 0.5 - cy;
       if (dx * dx + dy * dy > r * r) continue;
       if (mouthHalf > 0) {
         let a = Math.atan2(dy, dx) - dirAngle;
         while (a > Math.PI) a -= 2 * Math.PI;
         while (a < -Math.PI) a += 2 * Math.PI;
+        // The mouth is a wedge that narrows to a point at the center.
         if (Math.abs(a) < mouthHalf) continue;
       }
       px(ctx, x, y, COLORS.pac);
@@ -107,44 +134,56 @@ function makePacSprite(dirAngle, mouthHalf, scale = 1) {
 }
 
 const DIR_ANGLE = { RIGHT: 0, DOWN: Math.PI / 2, LEFT: Math.PI, UP: -Math.PI / 2 };
+// Mouth stages: shut, half, wide (~90 degrees total at its widest).
+const MOUTH = [0, 0.30, 0.78];
 
-// Ghost body 14x14 in a 16x16 cell.
-const SKIRT = {
-  // two animation frames; strings are 14 wide ('1' = pixel on)
-  a: ['11111111111111', '11011110111101', '10001100110001'],
-  b: ['11111111111111', '01110110110111', '00100100100100'],
-};
+// ---------------------------------------------------------------------------
+// Ghost sprites: 14x14 body in a 16x16 cell — domed top, straight flanks and
+// a zig-zag skirt that alternates between two phases.
+
+function skirtDepth(x, frame) {
+  // Frame A points down at x=1,5,9,13; frame B at x=3,7,11.
+  const points = frame === 'a' ? [1, 5, 9, 13] : [3, 7, 11];
+  let best = 99;
+  for (const p of points) best = Math.min(best, Math.abs(x - p));
+  return Math.max(0, 3 - best);
+}
 
 function makeGhostBody(color, frame) {
   const cv = makeCanvas(16, 16);
   const ctx = cv.getContext('2d');
   const ox = 1, oy = 1;
-  for (let y = 0; y < 11; y++) {
-    let half;
-    if (y >= 6) half = 7;
-    else half = Math.sqrt(49 - (6 - y) * (6 - y));
-    const x0 = Math.round(7 - half), x1 = Math.round(7 + half);
-    for (let x = x0; x < x1; x++) px(ctx, ox + x, oy + y, color);
+  ctx.fillStyle = color;
+  // dome (rows 0-10): circular cap of radius 7.5 centred at (6.5, 7)
+  for (let y = 0; y <= 10; y++) {
+    let half = 7.5;
+    if (y < 7) half = Math.sqrt(56.25 - (7 - y) * (7 - y));
+    const x0 = Math.max(0, Math.round(6.5 - half));
+    const x1 = Math.min(13, Math.round(6.5 + half));
+    ctx.fillRect(ox + x0, oy + y, x1 - x0 + 1, 1);
   }
-  const mask = SKIRT[frame];
-  for (let r = 0; r < 3; r++) {
-    for (let x = 0; x < 14; x++) {
-      if (mask[r][x] === '1') px(ctx, ox + x, oy + 11 + r, color);
-    }
+  // skirt (rows 11-13)
+  for (let x = 0; x < 14; x++) {
+    const d = skirtDepth(x, frame);
+    for (let k = 0; k < d; k++) ctx.fillRect(ox + x, oy + 11 + k, 1, 1);
   }
   return cv;
 }
 
+// Eye: 4x4 white blob with clipped corners, 2x2 pupil offset by gaze.
+const GAZE = { UP: [0, -1], DOWN: [0, 1], LEFT: [-1, 0], RIGHT: [1, 0] };
+const PUPIL = { UP: [1, 0], DOWN: [1, 2], LEFT: [0, 1], RIGHT: [2, 1] };
+
 function drawGhostEyes(ctx, dirName, ox = 1, oy = 1) {
-  const off = {
-    UP: [0, -2], DOWN: [0, 2], LEFT: [-2, 0], RIGHT: [2, 0],
-  }[dirName] || [0, 0];
-  for (const ex of [3, 9]) {
-    // white of eye 3x4 (shifted by gaze)
+  const gaze = GAZE[dirName] || [0, 0];
+  const pupil = PUPIL[dirName] || [1, 1];
+  for (const ex of [2, 8]) {
+    const wx = ox + ex + gaze[0], wy = oy + 4 + gaze[1];
     ctx.fillStyle = COLORS.eyeWhite;
-    ctx.fillRect(ox + ex + off[0] * 0.5, oy + 3 + off[1] * 0.5, 3, 4);
+    ctx.fillRect(wx + 1, wy, 2, 4);
+    ctx.fillRect(wx, wy + 1, 4, 2);
     ctx.fillStyle = COLORS.pupil;
-    ctx.fillRect(ox + ex + 0.5 + off[0], oy + 4 + off[1], 2, 2);
+    ctx.fillRect(wx + pupil[0], wy + pupil[1], 2, 2);
   }
 }
 
@@ -159,12 +198,13 @@ function makeFrightSprite(flash, frame) {
   const face = flash ? COLORS.flashFace : COLORS.frightFace;
   const cv = makeGhostBody(body, frame);
   const ctx = cv.getContext('2d');
-  // simple face: two square eyes + zig-zag mouth
   ctx.fillStyle = face;
-  ctx.fillRect(1 + 3, 1 + 4, 2, 2);
-  ctx.fillRect(1 + 9, 1 + 4, 2, 2);
-  for (let i = 0; i < 7; i++) {
-    ctx.fillRect(1 + i * 2, 1 + (i % 2 === 0 ? 9 : 8), 2, 1);
+  ctx.fillRect(1 + 3, 1 + 5, 2, 2);
+  ctx.fillRect(1 + 9, 1 + 5, 2, 2);
+  // zig-zag mouth across the face
+  for (let i = 0; i < 12; i++) {
+    const up = (i % 4 === 1 || i % 4 === 2);
+    ctx.fillRect(1 + 1 + i, 1 + (up ? 9 : 10), 1, 1);
   }
   return cv;
 }
@@ -175,142 +215,113 @@ function makeEyesSprite(dirName) {
   return cv;
 }
 
-// Fruit sprites: original 12x12 pixel art, drawn in a 16x16 cell.
-// legend: r=red, R=dark red, g=green, G=dark green, y=yellow, o=orange,
-//         p=purple, w=white, c=cyan, t=tan/stem
-const FRUIT_ART = {
-  cherry: [
-    '..........t.',
-    '.........t..',
-    '.......tt...',
-    '.....tt.....',
-    '...tt.......',
-    '..t.........',
-    'rrr...rrr...',
-    'rrrr.rrrrr..',
-    'rwrr.rrwrr..',
-    'rrrr.rrrrr..',
-    '.rr...rrr...',
-    '............',
-  ],
-  strawberry: [
-    '....GGG.....',
-    '..GGGGGGG...',
-    'rrrrGGGrrr..',
-    'rrwrrrrrwr..',
-    'rrrrrwrrrr..',
-    'rwrrrrrrwr..',
-    '.rrrwrrrr...',
-    '.rwrrrwrr...',
-    '..rrrrrr....',
-    '...rwrr.....',
-    '....rr......',
-    '............',
-  ],
-  peach: [
-    '......tG....',
-    '.....tGG....',
-    '....t.......',
-    '..oooooo....',
-    '.oooooooo...',
-    'oooooooooo..',
-    'oooooooooo..',
-    'oooooooooo..',
-    '.oooooooo...',
-    '..oooooo....',
-    '...oooo.....',
-    '............',
-  ],
-  apple: [
-    '.....t......',
-    '....t.......',
-    '..rr.rrr....',
-    '.rrrrrrrr...',
-    'rrrrrrrrrr..',
-    'rrrrrrrrrr..',
-    'rrrrrrrrrr..',
-    'rrrrrrrrrr..',
-    '.rrrrrrrw...',
-    '.rrrr.rrw...',
-    '..rr...w....',
-    '............',
-  ],
-  grapes: [
-    '.....GG.....',
-    '...GGGG.....',
-    '.....G......',
-    '...ppppp....',
-    '..ppppppp...',
-    '.ppwpppppp..',
-    '.ppppppppp..',
-    '.pppppppp...',
-    '..ppppppp...',
-    '...ppppp....',
-    '....ppp.....',
-    '.....p......',
-  ],
-  galaxian: [
-    '............',
-    'y....r....y.',
-    'y....r....y.',
-    'yy..rrr..yy.',
-    '.y.rrrrr.y..',
-    '.yrrrrrrry..',
-    '..rr.r.rr...',
-    '..r..r..r...',
-    '.....r......',
-    '.....r......',
-    '............',
-    '............',
-  ],
-  bell: [
-    '.....cc.....',
-    '....yyyy....',
-    '...yyyyyy...',
-    '..yyyyyyyy..',
-    '..yyyyyyyy..',
-    '..yyyyyyyy..',
-    '..yyyyyyyy..',
-    '.yyyyyyyyyy.',
-    '.yyyyyyyyyy.',
-    '....wwcc....',
-    '............',
-    '............',
-  ],
-  key: [
-    '....ccc.....',
-    '...cc.cc....',
-    '...cc.cc....',
-    '....ccc.....',
-    '.....w......',
-    '.....w......',
-    '.....ww.....',
-    '.....w......',
-    '.....ww.....',
-    '.....w......',
-    '............',
-    '............',
-  ],
+// ---------------------------------------------------------------------------
+// Fruit sprites (original artwork), drawn into a 16x16 cell.
+
+const F = {
+  red: '#ff0000', dark: '#b81800', green: '#00b800', leaf: '#00ff00',
+  orange: '#ffb852', brown: '#b87800', white: '#dedede', cyan: '#00ffff',
+  yellow: '#ffff00', blue: '#2121ff', melon: '#00d800', melonLite: '#b8ffb8',
 };
-const FRUIT_COLORS = {
-  r: '#ff0000', R: '#b80000', g: '#00ff00', G: '#00b800', y: '#ffff00',
-  o: '#ffb852', p: '#b852ff', w: '#dedede', c: '#00ffff', t: '#b87800',
+
+const FRUIT_BUILDERS = {
+  cherry(c) {
+    pxs(c, [[6, 9], [7, 8], [8, 7], [9, 6], [10, 5], [11, 4], [11, 8], [11, 7], [11, 6], [11, 5]], F.green);
+    pxs(c, [[12, 3], [13, 3], [13, 2], [12, 4]], F.leaf);
+    disc(c, 5, 11.5, 3.3, F.red);
+    disc(c, 11, 12, 3.3, F.red);
+    pxs(c, [[3, 10], [9, 11]], F.white);
+  },
+  strawberry(c) {
+    pxs(c, [[7, 1], [8, 1], [7, 2]], F.green);
+    for (let x = 4; x <= 11; x++) px(c, x, 3, F.leaf);
+    pxs(c, [[5, 4], [7, 4], [9, 4], [10, 4], [6, 4], [8, 4]], F.leaf);
+    // tapering body
+    for (let y = 5; y <= 13; y++) {
+      const half = 4.6 * (1 - (y - 5) / 10.5);
+      const x0 = Math.round(7.5 - half - 0.5), x1 = Math.round(7.5 + half - 0.5);
+      c.fillStyle = F.red;
+      c.fillRect(x0, y, x1 - x0 + 1, 1);
+    }
+    pxs(c, [[5, 6], [9, 6], [7, 8], [4, 9], [10, 9], [6, 11], [9, 11]], F.white);
+  },
+  orange(c) {
+    pxs(c, [[7, 3], [7, 4]], F.brown);
+    pxs(c, [[8, 2], [9, 2], [10, 3], [9, 3]], F.leaf);
+    disc(c, 7.5, 9.5, 4.6, F.orange);
+    pxs(c, [[5, 7], [4, 8]], F.white);
+  },
+  apple(c) {
+    disc(c, 5.6, 10, 3.9, F.red);
+    disc(c, 9.4, 10, 3.9, F.red);
+    c.fillStyle = F.red;
+    c.fillRect(5, 7, 5, 7);
+    pxs(c, [[7, 4], [7, 5], [7, 3]], F.brown);
+    pxs(c, [[8, 3], [9, 3], [9, 2], [10, 3]], F.leaf);
+    pxs(c, [[4, 8], [3, 9]], F.white);
+  },
+  melon(c) {
+    pxs(c, [[7, 3], [7, 4], [8, 3]], F.green);
+    disc(c, 7.5, 9.5, 4.8, F.melon);
+    // lighter meridian stripes following the curve of the rind
+    for (let y = 6; y <= 13; y++) {
+      const t = (y - 9.5) / 4.8;
+      const w = Math.sqrt(Math.max(0, 1 - t * t));
+      for (const s of [-0.66, 0, 0.66]) {
+        px(c, Math.round(7.5 + s * 4.8 * w), y, F.melonLite);
+      }
+    }
+  },
+  galaxian(c) {
+    // flagship: red nose, yellow swept wings, blue underside
+    pxs(c, [[7, 2], [8, 2], [7, 3], [8, 3], [6, 4], [7, 4], [8, 4], [9, 4]], F.red);
+    pxs(c, [[6, 5], [7, 5], [8, 5], [9, 5]], F.red);
+    pxs(c, [[2, 5], [3, 6], [2, 6], [12, 6], [13, 6], [13, 5]], F.yellow);
+    for (let i = 0; i < 5; i++) {
+      pxs(c, [[2 + i, 7], [11 - i + 2, 7]], F.yellow);
+    }
+    pxs(c, [[3, 8], [4, 8], [11, 8], [12, 8], [4, 9], [11, 9]], F.yellow);
+    pxs(c, [[6, 6], [7, 6], [8, 6], [9, 6], [6, 7], [7, 7], [8, 7], [9, 7]], F.blue);
+    pxs(c, [[6, 8], [7, 8], [8, 8], [9, 8], [7, 9], [8, 9], [7, 10], [8, 10]], F.blue);
+    pxs(c, [[5, 10], [10, 10], [6, 11], [9, 11]], F.yellow);
+  },
+  bell(c) {
+    pxs(c, [[7, 2], [8, 2]], F.white);
+    // bell body widening downward
+    for (let y = 3; y <= 11; y++) {
+      const half = 1.6 + (y - 3) * 0.62;
+      const x0 = Math.round(7.5 - half - 0.5), x1 = Math.round(7.5 + half - 0.5);
+      c.fillStyle = F.yellow;
+      c.fillRect(x0, y, x1 - x0 + 1, 1);
+    }
+    c.fillStyle = F.yellow;
+    c.fillRect(2, 12, 12, 1);
+    c.fillStyle = F.white;
+    c.fillRect(3, 13, 10, 1);
+    pxs(c, [[7, 14], [8, 14]], F.white);
+    pxs(c, [[5, 5], [4, 7], [4, 9]], F.white);
+  },
+  key(c) {
+    c.fillStyle = F.cyan;
+    c.fillRect(5, 2, 6, 5);
+    c.fillStyle = '#000';
+    c.fillRect(7, 4, 2, 2);
+    c.fillStyle = F.white;
+    c.fillRect(7, 7, 2, 7);
+    c.fillStyle = F.white;
+    c.fillRect(9, 10, 2, 1);
+    c.fillRect(9, 12, 2, 1);
+  },
 };
 
 function makeFruitSprite(name) {
   const cv = makeCanvas(16, 16);
   const ctx = cv.getContext('2d');
-  const art = FRUIT_ART[name];
-  for (let y = 0; y < art.length; y++) {
-    for (let x = 0; x < art[y].length; x++) {
-      const ch = art[y][x];
-      if (ch !== '.') px(ctx, x + 2, y + 2, FRUIT_COLORS[ch]);
-    }
-  }
+  FRUIT_BUILDERS[name](ctx);
   return cv;
 }
 
-// Ghost-score sprites (200/400/800/1600) with a tiny 3x5 digit font.
+// Ghost-score sprites (200/400/800/1600) with a 3x5 digit font.
 const MINI_DIGITS = {
   0: ['111', '101', '101', '101', '111'],
   1: ['010', '110', '010', '010', '111'],
@@ -344,37 +355,37 @@ export class Renderer {
     this.ctx.imageSmoothingEnabled = false;
     this.maze = maze;
     this.buildSprites();
-    this.wallBlue = this.renderWalls(COLORS.wall, true);
-    this.wallWhite = this.renderWalls('#dedede', false);
+    const mask = this.computeWallMask();
+    this.wallBlue = this.paintWalls(mask, COLORS.wall, true);
+    this.wallWhite = this.paintWalls(mask, '#dedede', false);
   }
 
   buildSprites() {
     const S = this.sprites = {};
-    // Pac: 3 mouth stages x 4 directions (+ closed shared)
     S.pacClosed = makePacSprite(0, 0);
     S.pac = {};
     for (const d of ['RIGHT', 'DOWN', 'LEFT', 'UP']) {
       S.pac[d] = [
-        makePacSprite(DIR_ANGLE[d], 0.55),
-        makePacSprite(DIR_ANGLE[d], 1.15),
+        makePacSprite(DIR_ANGLE[d], MOUTH[1]),
+        makePacSprite(DIR_ANGLE[d], MOUTH[2]),
       ];
     }
     S.pacGiant = {};
     for (const d of ['RIGHT', 'LEFT']) {
       S.pacGiant[d] = [
-        makePacSprite(DIR_ANGLE[d], 0.55, 2),
-        makePacSprite(DIR_ANGLE[d], 1.15, 2),
+        makePacSprite(DIR_ANGLE[d], MOUTH[1], 2),
+        makePacSprite(DIR_ANGLE[d], MOUTH[2], 2),
       ];
     }
-    // Death animation: mouth opens upward until the body vanishes, then pops.
+    // Death: the mouth opens upward until the body is gone, then a burst.
     S.pacDeath = [];
     for (let i = 0; i < 11; i++) {
-      S.pacDeath.push(makePacSprite(DIR_ANGLE.UP, 0.3 + (i / 10) * 2.8));
+      S.pacDeath.push(makePacSprite(DIR_ANGLE.UP, 0.22 + (i / 10) * 2.9));
     }
     const pop = makeCanvas(16, 16);
     const pc = pop.getContext('2d');
     pc.fillStyle = COLORS.pac;
-    for (const [x, y] of [[7, 2], [7, 12], [2, 7], [12, 7], [3, 3], [11, 3], [3, 11], [11, 11]]) {
+    for (const [x, y] of [[7, 1], [7, 13], [1, 7], [13, 7], [3, 3], [11, 3], [3, 11], [11, 11]]) {
       pc.fillRect(x, y, 2, 2);
     }
     S.pacDeath.push(pop);
@@ -394,47 +405,178 @@ export class Renderer {
     S.eyes = {};
     for (const d of ['RIGHT', 'DOWN', 'LEFT', 'UP']) S.eyes[d] = makeEyesSprite(d);
     S.fruit = {};
-    for (const name of Object.keys(FRUIT_ART)) S.fruit[name] = makeFruitSprite(name);
+    for (const name of Object.keys(FRUIT_BUILDERS)) S.fruit[name] = makeFruitSprite(name);
     S.score = {};
     for (const v of [200, 400, 800, 1600]) S.score[v] = makeScoreSprite(v);
   }
 
-  // Rounded thin-outline wall rendering, drawn once to an offscreen canvas.
-  renderWalls(color, withDoor) {
-    const cv = makeCanvas(WIDTH, HEIGHT);
-    const ctx = cv.getContext('2d');
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    const isW = (c, r) => this.maze.isWall(c, r) &&
-      !(r === 17 && (c < 0 || c >= COLS)); // treat off-screen tunnel as open
-    const wallOrDoor = (c, r) => this.maze.isWall(c, r) || this.maze.isDoor(c, r);
+  // Tiles that are open but lie outside the maze proper (the black margins
+  // beside the tunnel). Found by flooding inward from the playfield border
+  // through non-wall tiles, never entering the tunnel row — which is the one
+  // place the outside genuinely connects to a corridor.
+  computeExteriorTiles() {
+    const ext = new Set();
+    const stack = [];
+    const top = MAZE_TOP, bottom = MAZE_TOP + 30;
+    const visit = (c, r) => {
+      if (c < 0 || c >= COLS || r < top || r > bottom) return;
+      if (r === TUNNEL_ROW || this.maze.wall[r][c]) return;
+      const k = `${c},${r}`;
+      if (ext.has(k)) return;
+      ext.add(k);
+      stack.push([c, r]);
+    };
+    for (let r = top; r <= bottom; r++) { visit(0, r); visit(COLS - 1, r); }
+    for (let c = 0; c < COLS; c++) { visit(c, top); visit(c, bottom); }
+    while (stack.length) {
+      const [c, r] = stack.pop();
+      visit(c + 1, r); visit(c - 1, r); visit(c, r + 1); visit(c, r - 1);
+    }
+    return ext;
+  }
+
+  // The maze outline is traced as a path rather than filled per tile: each
+  // wall region gets a contour inset 3.5px from the open space beside it,
+  // with every corner arced — the look of the original's tile set. Sides that
+  // face the black margin outside the maze are inset only 0.5px instead,
+  // which is what gives the perimeter its characteristic double line.
+  buildWallPath() {
+    const IN = 3.5, OUT = 0.5, R = 4;
+    const top = MAZE_TOP, bottom = MAZE_TOP + 30;
+    const ext = this.computeExteriorTiles();
+    const path = new Path2D();
+
+    const isWall = (c, r) => {
+      if (c < 0 || c >= COLS || r < 0 || r >= ROWS) return false;
+      return this.maze.wall[r][c] && !this.maze.door[r][c];
+    };
+    const exterior = (c, r) => {
+      if (c < 0 || c >= COLS || r < top || r > bottom) return true;
+      return ext.has(`${c},${r}`);
+    };
+    // How far the contour sits from the edge shared with this neighbour.
+    const inset = (c, r) => (exterior(c, r) ? OUT : IN);
+
+    // Straight runs along each open-facing side, trimmed where a corner arc
+    // takes over.
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
-        if (!this.maze.isWall(c, r)) continue;
+        if (!isWall(c, r)) continue;
         const x = c * TILE, y = r * TILE;
-        const n = wallOrDoor(c, r - 1), s = wallOrDoor(c, r + 1);
-        const w = wallOrDoor(c - 1, r), e = wallOrDoor(c + 1, r);
-        const nw = wallOrDoor(c - 1, r - 1), ne = wallOrDoor(c + 1, r - 1);
-        const sw = wallOrDoor(c - 1, r + 1), se = wallOrDoor(c + 1, r + 1);
-        const d = 3.5; // inset of the outline from the open side
-        ctx.beginPath();
-        // Edges facing open space
-        if (!n) { ctx.moveTo(x + (w ? 0 : d), y + d); ctx.lineTo(x + (e ? 8 : 8 - d), y + d); }
-        if (!s) { ctx.moveTo(x + (w ? 0 : d), y + 8 - d); ctx.lineTo(x + (e ? 8 : 8 - d), y + 8 - d); }
-        if (!w) { ctx.moveTo(x + d, y + (n ? 0 : d)); ctx.lineTo(x + d, y + (s ? 8 : 8 - d)); }
-        if (!e) { ctx.moveTo(x + 8 - d, y + (n ? 0 : d)); ctx.lineTo(x + 8 - d, y + (s ? 8 : 8 - d)); }
-        // Concave corners (wall on both sides, open diagonal)
-        if (n && w && !nw) { ctx.moveTo(x, y + d); ctx.quadraticCurveTo(x + d, y + d, x + d, y); }
-        if (n && e && !ne) { ctx.moveTo(x + 8, y + d); ctx.quadraticCurveTo(x + 8 - d, y + d, x + 8 - d, y); }
-        if (s && w && !sw) { ctx.moveTo(x, y + 8 - d); ctx.quadraticCurveTo(x + d, y + 8 - d, x + d, y + 8); }
-        if (s && e && !se) { ctx.moveTo(x + 8, y + 8 - d); ctx.quadraticCurveTo(x + 8 - d, y + 8 - d, x + 8 - d, y + 8); }
-        ctx.stroke();
+        const oN = !isWall(c, r - 1), oS = !isWall(c, r + 1);
+        const oE = !isWall(c + 1, r), oW = !isWall(c - 1, r);
+        const iN = inset(c, r - 1), iS = inset(c, r + 1);
+        const iE = inset(c + 1, r), iW = inset(c - 1, r);
+        if (oN) {
+          const a = oW ? x + iW + R : x, b = oE ? x + TILE - iE - R : x + TILE;
+          if (b > a) { path.moveTo(a, y + iN); path.lineTo(b, y + iN); }
+        }
+        if (oS) {
+          const a = oW ? x + iW + R : x, b = oE ? x + TILE - iE - R : x + TILE;
+          if (b > a) { path.moveTo(a, y + TILE - iS); path.lineTo(b, y + TILE - iS); }
+        }
+        if (oW) {
+          const a = oN ? y + iN + R : y, b = oS ? y + TILE - iS - R : y + TILE;
+          if (b > a) { path.moveTo(x + iW, a); path.lineTo(x + iW, b); }
+        }
+        if (oE) {
+          const a = oN ? y + iN + R : y, b = oS ? y + TILE - iS - R : y + TILE;
+          if (b > a) { path.moveTo(x + TILE - iE, a); path.lineTo(x + TILE - iE, b); }
+        }
       }
     }
-    void isW;
+
+    // Corner arcs, classified per grid vertex by which of its four quadrants
+    // are wall. One wall (or two diagonal) means a convex corner; three walls
+    // means the contour wraps a concave corner around the single open tile.
+    const HALF = Math.PI / 2;
+    // arc() would otherwise join to whatever point the path last held.
+    const arcSeg = (cx, cy, rad, a0, a1) => {
+      path.moveTo(cx + rad * Math.cos(a0), cy + rad * Math.sin(a0));
+      path.arc(cx, cy, rad, a0, a1);
+    };
+    for (let gr = 0; gr <= ROWS; gr++) {
+      for (let gc = 0; gc <= COLS; gc++) {
+        const x = gc * TILE, y = gr * TILE;
+        const q = {
+          nw: isWall(gc - 1, gr - 1), ne: isWall(gc, gr - 1),
+          sw: isWall(gc - 1, gr), se: isWall(gc, gr),
+        };
+        const walls = (q.nw ? 1 : 0) + (q.ne ? 1 : 0) + (q.sw ? 1 : 0) + (q.se ? 1 : 0);
+        if (walls === 0 || walls === 4) continue;
+
+        // convex corner of a lone wall quadrant
+        const convex = (which) => {
+          if (which === 'se') {
+            const cx = x + inset(gc - 1, gr) + R, cy = y + inset(gc, gr - 1) + R;
+            arcSeg(cx, cy, R, Math.PI, 3 * HALF);
+          } else if (which === 'sw') {
+            const cx = x - inset(gc, gr) - R, cy = y + inset(gc - 1, gr - 1) + R;
+            arcSeg(cx, cy, R, 3 * HALF, 4 * HALF);
+          } else if (which === 'ne') {
+            const cx = x + inset(gc - 1, gr - 1) + R, cy = y - inset(gc, gr) - R;
+            arcSeg(cx, cy, R, HALF, Math.PI);
+          } else {
+            const cx = x - inset(gc, gr - 1) - R, cy = y - inset(gc - 1, gr) - R;
+            arcSeg(cx, cy, R, 0, HALF);
+          }
+        };
+
+        if (walls === 1) {
+          convex(q.se ? 'se' : q.sw ? 'sw' : q.ne ? 'ne' : 'nw');
+        } else if (walls === 2) {
+          if (q.nw && q.se) { convex('se'); convex('nw'); }
+          else if (q.ne && q.sw) { convex('sw'); convex('ne'); }
+          // adjacent pairs are a straight run — nothing to draw
+        } else {
+          // three walls: arc around the single open quadrant
+          if (!q.nw) {
+            const d = inset(gc - 1, gr - 1);
+            arcSeg(x + d, y + d, d, Math.PI, 3 * HALF);
+          } else if (!q.ne) {
+            const d = inset(gc, gr - 1);
+            arcSeg(x - d, y + d, d, 3 * HALF, 4 * HALF);
+          } else if (!q.sw) {
+            const d = inset(gc - 1, gr);
+            arcSeg(x + d, y - d, d, HALF, Math.PI);
+          } else {
+            const d = inset(gc, gr);
+            arcSeg(x - d, y - d, d, 0, HALF);
+          }
+        }
+      }
+    }
+    return path;
+  }
+
+  // Stroke the contour, then threshold coverage so the result is hard pixels
+  // rather than the antialiased edges canvas would otherwise leave.
+  computeWallMask() {
+    const cv = makeCanvas(WIDTH, HEIGHT);
+    const ctx = cv.getContext('2d');
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke(this.buildWallPath());
+    const data = ctx.getImageData(0, 0, WIDTH, HEIGHT).data;
+    const mask = new Uint8Array(WIDTH * HEIGHT);
+    for (let i = 0; i < mask.length; i++) if (data[i * 4 + 3] > 120) mask[i] = 1;
+    return mask;
+  }
+
+  paintWalls(mask, color, withDoor) {
+    const cv = makeCanvas(WIDTH, HEIGHT);
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(WIDTH, HEIGHT);
+    const [r, g, b] = hexToRgb(color);
+    for (let i = 0; i < mask.length; i++) {
+      if (!mask[i]) continue;
+      const o = i * 4;
+      img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
     if (withDoor) {
       ctx.fillStyle = COLORS.door;
-      for (const [c, r] of DOOR_TILES) ctx.fillRect(c * TILE, r * TILE + 3, TILE, 2);
+      for (const [c, rr] of DOOR_TILES) ctx.fillRect(c * TILE, rr * TILE + 3, TILE, 2);
     }
     return cv;
   }
@@ -459,9 +601,7 @@ export class Renderer {
         if (d === 1) {
           ctx.fillRect(c * TILE + 3, r * TILE + 3, 2, 2);
         } else if (d === 2 && blinkOn) {
-          ctx.beginPath();
-          ctx.arc(c * TILE + 4, r * TILE + 4, 3.5, 0, Math.PI * 2);
-          ctx.fill();
+          disc(ctx, c * TILE + 4, r * TILE + 4, 3.6, COLORS.dot);
         }
       }
     }
@@ -472,12 +612,12 @@ export class Renderer {
   }
 
   drawPac(pac) {
+    // Cycle shut -> half -> wide -> half, freezing when Pac is not moving.
     const phase = Math.floor(pac.frame) % 4;
     let sprite;
-    if (!pac.moving && phase === 0) sprite = this.sprites.pac[pac.dir.name][0];
-    else if (phase === 0 || phase === 2) sprite = this.sprites.pac[pac.dir.name][0];
-    else if (phase === 1) sprite = this.sprites.pac[pac.dir.name][1];
-    else sprite = this.sprites.pacClosed;
+    if (phase === 0) sprite = this.sprites.pacClosed;
+    else if (phase === 2) sprite = this.sprites.pac[pac.dir.name][1];
+    else sprite = this.sprites.pac[pac.dir.name][0];
     this.blit(sprite, pac.x, pac.y);
   }
 
@@ -487,8 +627,7 @@ export class Renderer {
   }
 
   drawGhost(g, game) {
-    const anim = (game.tick >> 3) & 1 ? 'b' : 'a';
-    const fi = anim === 'a' ? 0 : 1;
+    const fi = (game.tick >> 3) & 1;
     if (g.state === GSTATE.EYES || g.state === GSTATE.ENTERING) {
       this.blit(this.sprites.eyes[g.dir.name], g.x, g.y);
       return;
@@ -516,7 +655,7 @@ export class Renderer {
     drawText(ctx, hs.padStart(6, ' '), 11, 1, COLORS.text);
     // lives (bottom-left)
     for (let i = 0; i < Math.min(game.lives, 5); i++) {
-      this.blit(this.sprites.pac.LEFT[1], 20 + i * 16, 34.5 * TILE + 4);
+      this.blit(this.sprites.pac.RIGHT[1], 20 + i * 16, 34.5 * TILE + 4);
     }
     // fruit history (bottom-right): last 7 levels
     const first = Math.max(1, game.level - 6);

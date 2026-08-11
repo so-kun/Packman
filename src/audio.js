@@ -1,23 +1,29 @@
-// Web Audio sound engine, restructured to mirror the behavior of the era's
-// 3-voice wavetable sound generators: three persistent voices whose frequency
-// and volume are re-programmed every 60 Hz tick from small parametric
-// "effect programs" (start frequency, per-tick increment, duration, repeats),
-// which recreates the characteristic stepped sweeps of the arcade hardware.
+// Web Audio sound engine, structured after the era's 3-voice wavetable sound
+// generators: three persistent voices whose frequency and volume are
+// re-programmed every 60 Hz tick from small parametric "effect programs"
+// (start frequency, per-tick frequency step, per-tick volume step, duration),
+// which is what produces the characteristic stepped sweeps and abrupt decays
+// of arcade hardware rather than the smooth glides a plain oscillator gives.
 //
-// All waveforms and programs are original synthesis tuned by ear against the
-// documented character of the arcade sounds — no ROM waveform data is used.
-// The start-up jingle is an original composition in period style.
+// All waveforms and programs are original synthesis, tuned by ear against the
+// documented character of the arcade sounds — no ROM waveform data is used,
+// and the tunes are original compositions in period style.
 
 const NOTE = (semisFromA4) => 440 * Math.pow(2, semisFromA4 / 12);
 
-// seg: {f0, df, n, vol, wave} — n ticks starting at f0 Hz, +df Hz per tick.
-function seg(f0, df, n, vol, wave = 'buzz') { return { f0, df, n, vol, wave }; }
-// sweep from f0 to f1 over n ticks
-function sweep(f0, f1, n, vol, wave = 'buzz') { return seg(f0, (f1 - f0) / n, n, vol, wave); }
+// One program step: n ticks starting at f0 Hz, stepping df Hz and dv volume
+// each tick.
+function seg(f0, df, n, vol, wave = 'buzz', dv = 0) {
+  return { f0, df, n, vol, wave, dv };
+}
+function sweep(f0, f1, n, vol, wave = 'buzz', dv = 0) {
+  return seg(f0, (f1 - f0) / n, n, vol, wave, dv);
+}
 function rest(n) { return seg(0, 0, n, 0); }
 
 class Voice {
   constructor(ctx, waves, dest) {
+    this.ctx = ctx;
     this.waves = waves;
     this.osc = ctx.createOscillator();
     this.gain = ctx.createGain();
@@ -25,9 +31,9 @@ class Voice {
     this.osc.setPeriodicWave(waves.buzz);
     this.osc.connect(this.gain).connect(dest);
     this.osc.start();
-    this.prog = null;   // array of segs
-    this.idx = 0;       // current seg
-    this.i = 0;         // tick within seg
+    this.prog = null;
+    this.idx = 0;
+    this.i = 0;
     this.loop = false;
     this.curWave = 'buzz';
   }
@@ -41,11 +47,17 @@ class Voice {
 
   stop() {
     this.prog = null;
-    this.gain.gain.value = 0;
+    this.setGain(0);
+  }
+
+  // A hard jump in gain clicks; a very short ramp keeps the stepped character
+  // without the click.
+  setGain(v) {
+    this.gain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.003);
   }
 
   tick() {
-    if (!this.prog) { this.gain.gain.value = 0; return; }
+    if (!this.prog) return;
     let s = this.prog[this.idx];
     while (s && this.i >= s.n) {
       this.idx++;
@@ -57,106 +69,137 @@ class Voice {
       s = this.prog[this.idx];
     }
     if (!s) { this.stop(); return; }
-    if (s.vol <= 0 || s.f0 <= 0) {
-      this.gain.gain.value = 0;
+    const vol = s.vol + s.dv * this.i;
+    if (vol <= 0 || s.f0 <= 0) {
+      this.setGain(0);
     } else {
       if (s.wave !== this.curWave && this.waves[s.wave]) {
         this.osc.setPeriodicWave(this.waves[s.wave]);
         this.curWave = s.wave;
       }
-      const f = s.f0 + s.df * this.i;
-      this.osc.frequency.value = Math.max(20, Math.min(4000, f));
-      this.gain.gain.value = s.vol;
+      this.osc.frequency.value = Math.max(20, Math.min(4000, s.f0 + s.df * this.i));
+      this.setGain(Math.min(0.4, vol));
     }
     this.i++;
   }
 }
 
-// Ambient loop programs. Five siren stages: pitch and sweep rate rise as the
-// board empties; each cycle is a slow up-then-down glide (~1 s at stage 0).
+// --- ambient loops ---------------------------------------------------------
+
+// Five siren stages: pitch and rate both climb as the board empties. Each
+// cycle glides up then drops back a little faster, which is what gives the
+// siren its lean rather than a symmetric warble.
 function sirenProg(stage) {
-  const base = 330 + stage * 115;
-  const range = 390 + stage * 25;
-  const half = Math.max(18, 32 - stage * 3); // ticks per half-sweep
+  const base = 340 + stage * 105;
+  const range = 300 + stage * 30;
+  const up = 22 - stage * 2;
+  const down = 14 - stage;
   return [
-    sweep(base, base + range, half, 0.16, 'hollow'),
-    sweep(base + range, base, half, 0.16, 'hollow'),
+    sweep(base, base + range, up, 0.15, 'hollow'),
+    sweep(base + range, base, down, 0.15, 'hollow'),
   ];
 }
-// Frightened: rising-only wobble repeating ~6x per second.
-const FRIGHT_PROG = [sweep(130, 420, 10, 0.15, 'hollow')];
-// Eyes flying home: fast high whine, up and down.
+// Frightened: a rising-only wobble, low and fast.
+const FRIGHT_PROG = [sweep(130, 400, 9, 0.14, 'hollow')];
+// Eyes flying home: fast high whine.
 const EYES_PROG = [
-  sweep(680, 1350, 11, 0.11, 'hollow'),
-  sweep(1350, 680, 11, 0.11, 'hollow'),
+  sweep(700, 1400, 9, 0.10, 'hollow'),
+  sweep(1400, 700, 9, 0.10, 'hollow'),
 ];
 
-// One chomp per dot, alternating a falling "wa" and rising "ka".
-const WAKA_DOWN = [sweep(550, 110, 5, 0.26)];
-const WAKA_UP = [sweep(110, 550, 5, 0.26)];
+// --- effects ---------------------------------------------------------------
+
+// One chomp per dot, alternating a falling and a rising sweep. Short and
+// decaying so a fast run of dots reads as continuous munching.
+const WAKA_DOWN = [sweep(600, 140, 6, 0.30, 'buzz', -0.035)];
+const WAKA_UP = [sweep(140, 600, 6, 0.30, 'buzz', -0.035)];
 
 function deathProg() {
-  // Center pitch steps down through six quick warbles, then two "puffs".
+  // Six warbles whose centre pitch steps down, then two rising puffs.
   const p = [];
-  for (const c of [900, 760, 630, 510, 400, 300]) {
-    p.push(sweep(c + 140, c - 60, 11, 0.22));
-    p.push(rest(1));
+  const centres = [880, 750, 620, 500, 390, 290];
+  for (let i = 0; i < centres.length; i++) {
+    p.push(sweep(centres[i] + 150, centres[i] - 70, 10, 0.24 - i * 0.012));
+    p.push(rest(2));
   }
   p.push(rest(8));
-  p.push(sweep(80, 420, 8, 0.24));
-  p.push(rest(6));
-  p.push(sweep(80, 420, 8, 0.24));
+  p.push(sweep(70, 430, 7, 0.26, 'buzz', -0.02));
+  p.push(rest(7));
+  p.push(sweep(70, 430, 7, 0.26, 'buzz', -0.02));
   return p;
 }
 
-const EAT_GHOST_PROG = [sweep(250, 1050, 30, 0.2)];
+// Gulp down, then the rising slurp as the ghost is swallowed.
+const EAT_GHOST_PROG = [
+  sweep(420, 150, 7, 0.24),
+  sweep(200, 1000, 22, 0.22, 'buzz', -0.004),
+];
 
-const EAT_FRUIT_PROG = [sweep(500, 170, 8, 0.24), sweep(170, 430, 8, 0.2)];
+const EAT_FRUIT_PROG = [
+  sweep(520, 180, 7, 0.26),
+  sweep(180, 620, 9, 0.24, 'buzz', -0.012),
+];
 
 function extraLifeProg() {
   const p = [];
   for (let i = 0; i < 9; i++) {
-    p.push(sweep(1350, 950, 6, 0.16, 'hollow'));
-    p.push(rest(4));
+    p.push(sweep(1400, 900, 5, 0.16, 'hollow', -0.012));
+    p.push(rest(3));
   }
   return p;
 }
 
-const CREDIT_PROG = [seg(620, 0, 4, 0.22), seg(990, 0, 8, 0.22)];
+const CREDIT_PROG = [seg(600, 0, 3, 0.24), seg(1000, 0, 7, 0.24, 'buzz', -0.02)];
 
-// Original start-up jingle (period-style: bright wavetable lead over an
-// octave-hopping bass). Notes are semitones relative to A4.
+// --- tunes (original compositions) -----------------------------------------
+
+// Start-up jingle: bright wavetable lead over an octave-hopping bass.
 function jingleLead() {
-  const E = 9; // ticks per eighth note
+  const E = 9;
   const n = (semi, ticks) => seg(NOTE(semi), 0, ticks, 0.15, 'lead');
   const p = [];
   const phrase = (a, b, c, d) => {
     p.push(n(a, E), n(b, E), n(c, E), n(d, E), n(c, E), n(b, E), n(a, E * 2), rest(E));
   };
-  phrase(3, 7, 10, 15);   // C5 E5 G5 C6 ...
-  phrase(5, 9, 12, 17);   // D5 F#5 A5 D6 ...
-  // closing run up
+  phrase(3, 7, 10, 15);
+  phrase(5, 9, 12, 17);
+  phrase(3, 7, 10, 15);
   for (const s of [7, 8, 9, 10, 11, 12]) p.push(n(s, 6));
   p.push(n(15, E * 3));
   return p;
 }
-function jingleBass(leadLen) {
+
+// Intermission tune: lighter and bouncier than the start jingle, so the
+// coffee breaks do not simply replay the opening.
+function intermissionLead() {
+  const n = (semi, ticks) => seg(NOTE(semi), 0, ticks, 0.14, 'lead');
   const p = [];
-  let low = true;
-  let t = 0;
-  while (t < leadLen) {
-    p.push(seg(NOTE(low ? -33 : -21), 0, 10, 0.2, 'tri'), rest(4));
+  const skip = (a, b) => p.push(n(a, 7), rest(2), n(b, 7), rest(2));
+  skip(10, 14); skip(12, 15); skip(10, 14); skip(7, 12);
+  p.push(n(9, 10), rest(3), n(11, 10), rest(3), n(12, 20), rest(8));
+  skip(12, 17); skip(14, 19); skip(12, 17); skip(9, 14);
+  p.push(n(10, 10), rest(3), n(12, 10), rest(3), n(15, 26));
+  return p;
+}
+
+function bassFor(totalTicks, low, high) {
+  const p = [];
+  let t = 0, alt = true;
+  while (t < totalTicks) {
+    p.push(seg(NOTE(alt ? low : high), 0, 9, 0.18, 'tri'), rest(5));
     t += 14;
-    low = !low;
+    alt = !alt;
   }
   return p;
 }
+
+const progLength = (p) => p.reduce((a, s) => a + s.n, 0);
 
 export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.muted = false;
-    this.suppressed = false; // true during attract-mode demo play (silent)
+    this.suppressed = false; // true during the attract-mode demo (silent)
     this.loopMode = 'none';
     this.sirenLevel = -1;
     this.wakaFlip = false;
@@ -167,31 +210,39 @@ export class AudioEngine {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     this.ctx = new AC();
+    // Three voices summing into one bus clip easily; a gentle limiter keeps
+    // the mix clean when a chomp lands on top of the siren.
     this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.3;
-    this.master.connect(this.ctx.destination);
-    // Hand-built harmonic recipes approximating small wavetable timbres:
+    this.master.gain.value = this.muted ? 0 : 0.5;
+    const comp = this.ctx.createDynamicsCompressor();
+    comp.threshold.value = -14;
+    comp.knee.value = 6;
+    comp.ratio.value = 6;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.1;
+    this.master.connect(comp).connect(this.ctx.destination);
+    // Hand-built harmonic recipes approximating small wavetable timbres.
     const mk = (harm) => this.ctx.createPeriodicWave(
       new Float32Array(harm), new Float32Array(harm.length));
     this.waves = {
-      // bright and buzzy (effects, waka): strong odd+even harmonic mix
-      buzz: mk([0, 1, 0.62, 0.85, 0.4, 0.55, 0.25, 0.3, 0.12, 0.15, 0.06]),
+      // bright and buzzy (chomps, effects): dense odd+even harmonics
+      buzz: mk([0, 1, 0.7, 0.9, 0.5, 0.62, 0.34, 0.4, 0.2, 0.24, 0.12, 0.14]),
       // rounder hollow tone (sirens): mostly odd harmonics
-      hollow: mk([0, 1, 0, 0.5, 0, 0.28, 0, 0.12, 0, 0.05]),
-      // lead voice for the jingle
-      lead: mk([0, 1, 0.4, 0.6, 0.2, 0.3, 0.1, 0.12]),
+      hollow: mk([0, 1, 0.06, 0.52, 0.05, 0.3, 0.03, 0.15, 0, 0.07]),
+      // lead voice for the tunes
+      lead: mk([0, 1, 0.45, 0.62, 0.24, 0.32, 0.12, 0.14]),
       // soft triangle-ish bass
-      tri: mk([0, 1, 0, 0.11, 0, 0.04]),
+      tri: mk([0, 1, 0, 0.12, 0, 0.045, 0, 0.02]),
     };
     this.fx = new Voice(this.ctx, this.waves, this.master);      // effects
     this.ambient = new Voice(this.ctx, this.waves, this.master); // siren etc.
-    this.melody = new Voice(this.ctx, this.waves, this.master);  // jingle lead
+    this.melody = new Voice(this.ctx, this.waves, this.master);  // tunes
     this.voices = [this.fx, this.ambient, this.melody];
   }
 
   setMuted(m) {
     this.muted = m;
-    if (this.master) this.master.gain.value = m ? 0 : 0.3;
+    if (this.master) this.master.gain.value = m ? 0 : 0.5;
   }
   toggleMute() { this.setMuted(!this.muted); }
 
@@ -220,20 +271,18 @@ export class AudioEngine {
     for (const v of this.voices) v.tick();
   }
 
+  get live() { return this.ctx && !this.suppressed; }
+
   waka() {
-    if (!this.ctx || this.suppressed) return;
+    if (!this.live) return;
     this.wakaFlip = !this.wakaFlip;
-    // Don't cut an in-flight chomp for smoother continuous munching.
-    if (this.fx.prog && this.fx.prog === (this.wakaFlip ? WAKA_UP : WAKA_DOWN)) return;
     this.fx.play(this.wakaFlip ? WAKA_DOWN : WAKA_UP);
   }
-
-  get live() { return this.ctx && !this.suppressed; }
 
   eatGhost() { if (this.live) this.fx.play(EAT_GHOST_PROG); }
   eatFruit() { if (this.live) this.fx.play(EAT_FRUIT_PROG); }
   // The extend fanfare rides the (otherwise idle) melody voice so rapid
-  // waka chomps don't cut it short.
+  // chomps don't cut it short.
   extraLife() { if (this.live) this.melody.play(extraLifeProg()); }
   credit() { if (this.live) this.fx.play(CREDIT_PROG); }
   death() { if (this.live) this.fx.play(deathProg()); }
@@ -241,8 +290,14 @@ export class AudioEngine {
   intro() {
     if (!this.live) return;
     const lead = jingleLead();
-    const len = lead.reduce((a, s) => a + s.n, 0);
     this.melody.play(lead);
-    this.fx.play(jingleBass(len));
+    this.fx.play(bassFor(progLength(lead), -33, -21));
+  }
+
+  intermission() {
+    if (!this.live) return;
+    const lead = intermissionLead();
+    this.melody.play(lead);
+    this.fx.play(bassFor(progLength(lead), -29, -17));
   }
 }

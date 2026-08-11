@@ -33,8 +33,8 @@ export const START_LIVES = 3;
 
 // Fruit per level: [spriteKey, points]
 const FRUITS = [
-  ['cherry', 100], ['strawberry', 300], ['peach', 500], ['peach', 500],
-  ['apple', 700], ['apple', 700], ['grapes', 1000], ['grapes', 1000],
+  ['cherry', 100], ['strawberry', 300], ['orange', 500], ['orange', 500],
+  ['apple', 700], ['apple', 700], ['melon', 1000], ['melon', 1000],
   ['galaxian', 2000], ['galaxian', 2000], ['bell', 3000], ['bell', 3000],
   ['key', 5000],
 ];
@@ -131,7 +131,7 @@ export const COLORS = {
   inky: '#00ffff',
   clyde: '#ffb852',
   frightBody: '#2121de',
-  frightFace: '#ffb8ae',
+  frightFace: '#dedede',
   flashBody: '#dedede',
   flashFace: '#ff0000',
   eyeWhite: '#dedede',

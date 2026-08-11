@@ -22,7 +22,7 @@ export class Cutscene {
     this.t = 0;
     this.duration = index === 1 ? 640 : 620;
     audio.setLoop('none');
-    audio.intro();
+    audio.intermission();
   }
 
   get done() { return this.t >= this.duration; }
