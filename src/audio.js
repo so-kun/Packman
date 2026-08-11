@@ -15,6 +15,7 @@
 // original and what is still guessed.
 
 import { WAVETABLE, SND_PRELUDE, SND_DEAD } from './romdata.js';
+import { SND_INTERMISSION } from './musicdata.js';
 
 const TICK_HZ = 60;
 const WSG_CLOCK = 96000;          // accumulator updates per second
@@ -158,50 +159,19 @@ function progCredit() {
   return out;
 }
 
-// The coffee-break tune. Unlike the start tune, no register capture of it
-// exists, so the melody is an original composition. Its timing, articulation
-// and register are the measured ones: notes step every 5 ticks (81 ms) and
-// sound for four of them, and the bass moves half as often, two beats low to
-// one high so its median sits on the low note.
-const STEP = 5, GATE = 4;
-const NOTE_REG = (semi, waveform) => REG(440 * Math.pow(2, semi / 12), waveform);
-
-function tuneVoice(notes, waveform, volume) {
-  const out = [];
-  for (const [semi, steps] of notes) {
-    const ticks = steps * STEP;
-    for (let t = 0; t < ticks; t++) {
-      const sounding = semi !== null && t < ticks - (STEP - GATE);
-      out.push(sounding
-        ? { f: NOTE_REG(semi, waveform), w: waveform, v: volume }
-        : { f: 0, w: waveform, v: 0 });
-    }
-  }
-  return out;
-}
-
-function bassVoice(totalTicks, low, high, waveform, volume) {
-  const out = [];
-  for (let i = 0; out.length < totalTicks; i++) {
-    const semi = i % 3 === 2 ? high : low;
-    for (let t = 0; t < 2 * STEP; t++) {
-      out.push(t < 2 * STEP - 2
-        ? { f: NOTE_REG(semi, waveform), w: waveform, v: volume }
-        : { f: 0, w: waveform, v: 0 });
-    }
-  }
-  return out.slice(0, totalTicks);
-}
-
+/**
+ * The coffee-break tune, decoded out of the program ROM's music sequences
+ * rather than composed (see tools/extract-music.mjs). Stored as note events;
+ * expanded here to the per-tick registers the renderer wants.
+ */
 function progIntermission() {
-  const notes = [];
-  const skip = (a, b) => notes.push([a, 1], [null, 1], [b, 1], [null, 1]);
-  skip(-6, -1); skip(-4, 1); skip(-6, -1); skip(-11, -6);
-  notes.push([-8, 2], [-6, 2], [-4, 3], [null, 1]);
-  skip(-1, 4); skip(1, 6); skip(-1, 4); skip(-6, -1);
-  notes.push([-4, 2], [-1, 2], [3, 4]);
-  const lead = tuneVoice(notes, 1, 9);
-  return [lead, bassVoice(lead.length, -29, -17, 0, 7)];
+  return SND_INTERMISSION.map((voice) => {
+    const out = [];
+    for (const [f, w, v, frames] of voice) {
+      for (let t = 0; t < frames; t++) out.push({ f, w, v });
+    }
+    return out;
+  });
 }
 
 // ---------------------------------------------------------------------------

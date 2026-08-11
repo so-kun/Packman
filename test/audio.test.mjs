@@ -160,6 +160,44 @@ test('the frightened sound keeps the original register ramp', () => {
   });
 });
 
+test('the coffee-break tune is the ROM sequence, two voices deep', () => {
+  const voices = SOUND_PROGRAMS.intermission();
+  assert.equal(voices.length, 2, 'bass and lead');
+  const [bass, lead] = voices;
+  assert.equal(bass.length, lead.length, 'both voices run the same length');
+  assert.equal(bass.length, 640, 'one pass through the looping sequence');
+
+  const hz = (s) => (s.f * 96000 * WAVEFORM_CYCLES[s.w]) / (1 << 20);
+  // The bass sits around 180 Hz on waveform 2, the lead around 360 on
+  // waveform 1 — the figures a recording of the machine shows.
+  assert.equal(bass[0].w, 2);
+  assert.equal(lead[0].w, 1);
+  assert.ok(Math.abs(hz(bass[0]) - 180) < 5, `bass starts at ${hz(bass[0]).toFixed(0)} Hz`);
+  assert.ok(Math.abs(hz(lead[0]) - 340) < 8, `lead starts at ${hz(lead[0]).toFixed(0)} Hz`);
+
+  // Every note has to be a real semitone off the ROM's table, or the decode
+  // has drifted: the table is 87..195 shifted left by a whole number of bits.
+  const NOTE_TABLE = [87, 92, 97, 103, 109, 116, 123, 130, 138, 146, 154, 163, 173, 184, 195];
+  for (const voice of voices) {
+    for (const step of voice) {
+      if (step.f === 0) continue;
+      const base = step.w === 1 ? step.f >> 4 : step.f;
+      const ok = NOTE_TABLE.some((n) => {
+        for (let shift = 0; shift <= 8; shift++) if (n << shift === base) return true;
+        return false;
+      });
+      assert.ok(ok, `frequency 0x${step.f.toString(16)} is not a table note`);
+    }
+  }
+
+  // Both voices must actually play; a decode that fell off the end would
+  // leave one of them silent.
+  for (const [i, voice] of voices.entries()) {
+    const sounding = voice.filter((s) => s.f > 0 && s.v > 0).length;
+    assert.ok(sounding > 200, `voice ${i} sounds for only ${sounding} frames`);
+  }
+});
+
 test('the waveform index wraps within one waveform', () => {
   // Waveform n occupies wavetable[n*32 .. n*32+31]; a shift error would read
   // into the neighbouring waveform and change the timbre.
