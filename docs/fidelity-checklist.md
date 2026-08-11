@@ -55,7 +55,8 @@ is which.
 | The 1-frame stop on a dot and 3-frame stop on an energizer | `src/game.js` |
 | Fruit at 70 and 170 dots; ghost chain scoring 200/400/800/1600 | `src/game.js` |
 | Level-256 kill screen: 8-bit counter overflow, garbled right half, too few dots to clear | `src/killscreen.js` |
-| Coin insert: measured off a recording rather than captured — a V from 633 Hz down to 76 and up to 856 over 14 ticks, on waveform 2 (the closest of the eight to the recording's harmonic ratios) | `src/audio.js` |
+| Coin insert: measured off a recording rather than captured — a V from 633 Hz down to 76 and up to 856 over 14 ticks, on waveform 2 | `src/audio.js` |
+| Eyes returning home: measured — a sawtooth falling 2484 Hz to 375 over 16 ticks and snapping back, on waveform 6 | `src/audio.js` |
 
 ## Approximated — still guesses
 
@@ -63,7 +64,7 @@ is which.
 |---|---|---|
 | **Random number sequence** | The original's PRNG state is in the program ROM, which this project does not run. Pattern strategies from the arcade will not transfer. | `src/ghosts.js` |
 | **Siren stages 1-4** | Only the base cycle is captured. The waveform, volume and 24-tick period are the original's; the per-stage rise in pitch and rate is by ear. | `src/audio.js` |
-| **Eyes-returning, energizer and extend sounds** | No register capture covers them. They use the ROM waveforms and the same register model, but their contours are chosen by ear. | `src/audio.js` |
+| **Energizer and extend sounds** | No register capture covers them and they have not been measured. They use the ROM waveforms and the same register model, but their contours are chosen by ear. | `src/audio.js` |
 | **Coffee-break tune** | No capture exists, so the melody is an original composition. Its timing, articulation and register are measured from a recording (5-tick steps, 84% gate, the bass moving half as often); only the tune itself is invented. | `src/audio.js` |
 | The attract screen's small "PTS" face | The ROM packs it two characters to a tile; it is redrawn rather than unpacked. | `src/render.js` |
 | Kill-screen garbage layout | Drawn from real tile and colour codes, but which codes land where is this project's PRNG, not the original's corrupted memory. | `src/killscreen.js` |

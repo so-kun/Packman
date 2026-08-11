@@ -1,21 +1,33 @@
-// Measures a recording of the arcade into per-tick pitch and level, which is
-// what a WSG register program needs.
+// Measures a recording of the arcade into what a WSG register program needs.
 //
 //   node tools/measure-sound.mjs <audio file> [floorDb]
+//   node tools/measure-sound.mjs <audio file> --fit <startHz> <endHz> <ticks> <firstTick>
 //
-// Decoding runs in headless Chromium because it is the decoder that is
-// actually to hand; the analysis is autocorrelation over one 60 Hz tick at a
-// time, since the hardware reprograms its voices on that grid.
+// The default mode prints the pitch and level of each 60 Hz tick, which is the
+// grid the hardware reprograms its voices on — read the contour off that.
+//
+// --fit then answers the other question: which of the eight ROM waveforms is
+// it. Comparing harmonic ratios directly does not work, because four of the
+// waveforms are not single-cycle and their harmonics do not land where a
+// naive comparison looks. Instead this synthesises the contour you measured on
+// every waveform in turn and compares spectra under identical analysis, so the
+// smearing a fast sweep causes affects candidate and recording alike.
+//
+// Decoding runs in headless Chromium because it is the MP3 decoder to hand.
 
 import { chromium } from 'playwright';
 import { readFileSync } from 'node:fs';
+import { renderProgram, WAVEFORM_CYCLES } from '../src/audio.js';
 
 const file = process.argv[2];
 if (!file) {
   console.error('usage: measure-sound.mjs <audio file> [floorDb]');
+  console.error('       measure-sound.mjs <audio file> --fit <startHz> <endHz> <ticks> <firstTick>');
   process.exit(1);
 }
-const floorDb = Number(process.argv[3] ?? -34);
+const fitting = process.argv[3] === '--fit';
+const [fitStart, fitEnd, fitTicks, fitFirst] = process.argv.slice(4).map(Number);
+const floorDb = Number((fitting ? undefined : process.argv[3]) ?? -34);
 
 const browser = await chromium.launch({ args: ['--no-sandbox'] });
 const page = await browser.newPage();
@@ -114,6 +126,49 @@ function rms(start, n) {
   let count = 0;
   for (let i = start; i < start + n && i < samples.length; i++, count++) sum += samples[i] * samples[i];
   return Math.sqrt(sum / (count || 1));
+}
+
+if (fitting) {
+  // Average log-spectrum over a run of ticks, normalised to its own peak.
+  const spectrum = (buf, tick0, n) => {
+    const acc = new Float64Array(WINDOW / 2);
+    for (let t = tick0; t < tick0 + n; t++) {
+      const s = Math.max(0, Math.min(buf.length - WINDOW, Math.round(t * TICK - (WINDOW - TICK) / 2)));
+      const re = new Float64Array(WINDOW);
+      const im = new Float64Array(WINDOW);
+      for (let i = 0; i < WINDOW; i++) {
+        re[i] = (buf[s + i] || 0) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (WINDOW - 1)));
+      }
+      fft(re, im);
+      for (let k = 1; k < WINDOW / 2; k++) acc[k] += Math.hypot(re[k], im[k]);
+    }
+    let mx = 0;
+    for (let k = 1; k < WINDOW / 2; k++) mx = Math.max(mx, acc[k]);
+    return acc.map((v) => Math.log10(v / (mx || 1) + 1e-4));
+  };
+
+  const recorded = spectrum(samples, fitFirst, fitTicks);
+  console.log(`fitting ${file}: ${fitStart} -> ${fitEnd} Hz over ${fitTicks} ticks\n`);
+  let best = null;
+  for (let w = 0; w < 8; w++) {
+    const cycles = WAVEFORM_CYCLES[w];
+    const prog = [];
+    for (let rep = 0; rep < 8; rep++) {
+      for (let t = 0; t < fitTicks; t++) {
+        const hz = fitStart + ((fitEnd - fitStart) * t) / (fitTicks - 1);
+        prog.push({ f: Math.round((hz / cycles) * (1 << 20) / 96000), w, v: 12 });
+      }
+    }
+    const synth = spectrum(renderProgram([prog], rate), fitTicks * 2, fitTicks);
+    let d = 0;
+    for (let k = 1; k < WINDOW / 2; k++) d += Math.abs(synth[k] - recorded[k]);
+    console.log(` w=${w} (x${String(cycles).padStart(2)})  spectral distance ${d.toFixed(1)}`);
+    if (!best || d < best.d) best = { w, d, cycles };
+  }
+  const reg = (hz) => `0x${Math.round((hz / best.cycles) * (1 << 20) / 96000).toString(16)}`;
+  console.log(`\nbest: waveform ${best.w} (plays x${best.cycles})`);
+  console.log(`registers: ${fitStart} Hz -> ${reg(fitStart)},  ${fitEnd} Hz -> ${reg(fitEnd)}`);
+  process.exit(0);
 }
 
 const ticks = Math.floor(samples.length / TICK);

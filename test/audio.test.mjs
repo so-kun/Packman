@@ -133,6 +133,33 @@ test('the coin sound is the measured V, not a flat beep', () => {
   assert.ok(Math.abs(hz[hz.length - 1] - 856) < 20, `ends at ${hz[hz.length - 1].toFixed(0)} Hz`);
 });
 
+test('the eyes-returning sound is the measured falling sweep, and it loops', () => {
+  const [prog] = SOUND_PROGRAMS.eyes();
+  assert.equal(prog.length, 16, 'the original resets every 16 ticks');
+  const hz = prog.map((s) => (s.f * 96000 * WAVEFORM_CYCLES[s.w]) / (1 << 20));
+  for (let i = 1; i < hz.length; i++) {
+    assert.ok(hz[i] < hz[i - 1], `tick ${i} should fall`);
+  }
+  // Measured off the recording: 2484 Hz down to 375, snapping back each cycle.
+  assert.ok(Math.abs(hz[0] - 2484) < 25, `starts at ${hz[0].toFixed(0)} Hz`);
+  assert.ok(Math.abs(hz[15] - 375) < 25, `ends at ${hz[15].toFixed(0)} Hz`);
+  // A constant register step is what makes the sweep linear and the loop join.
+  const steps = new Set(prog.slice(1).map((s, i) => prog[i].f - s.f));
+  assert.equal(steps.size, 1, 'the register step should be constant');
+});
+
+test('the frightened sound keeps the original register ramp', () => {
+  // This one is not a guess and must not drift: it matches a recording of the
+  // machine at 283/560/844/1120/1408/1686/1971/2251 Hz.
+  const [prog] = SOUND_PROGRAMS.fright();
+  assert.equal(prog.length, 8);
+  const hz = prog.map((s) => (s.f * 96000 * WAVEFORM_CYCLES[s.w]) / (1 << 20));
+  const expected = [281, 563, 844, 1125, 1406, 1688, 1969, 2250];
+  hz.forEach((v, i) => {
+    assert.ok(Math.abs(v - expected[i]) < 12, `tick ${i}: ${v.toFixed(0)} Hz, expected ~${expected[i]}`);
+  });
+});
+
 test('the waveform index wraps within one waveform', () => {
   // Waveform n occupies wavetable[n*32 .. n*32+31]; a shift error would read
   // into the neighbouring waveform and change the timbre.

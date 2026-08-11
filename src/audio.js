@@ -101,12 +101,19 @@ function progFrightened() {
 // These use the ROM waveforms and the same register model, but their contours
 // are chosen by ear rather than taken from the game.
 
-/** Eyes flying home: a fast high two-tone whine, 16 ticks per cycle. */
+/**
+ * Eyes flying home. Measured off a recording: a sawtooth sweep that falls from
+ * about 2484 Hz to 375 Hz over sixteen ticks and snaps straight back, so the
+ * buffer loops on its own period. Waveform 6 fits the recording's spectrum
+ * best of the eight (229 against 285 for the next candidate), and being
+ * single-cycle its register value is the pitch.
+ */
 function progEyes() {
   const out = [];
+  let f = 0x6a00;
   for (let t = 0; t < 16; t++) {
-    const hz = t < 8 ? 1000 + t * 60 : 1420 - (t - 8) * 60;
-    out.push({ f: REG(hz, 6), w: 6, v: 5 });
+    out.push({ f, w: 6, v: 6 });
+    f -= 0x0600;
   }
   return out;
 }
