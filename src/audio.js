@@ -170,42 +170,59 @@ const CREDIT_PROG = [seg(600, 0, 3, 0.24), seg(1000, 0, 7, 0.24, 'buzz', -0.02)]
 
 // --- tunes (original compositions) -----------------------------------------
 
-// Start-up jingle: bright wavetable lead over an octave-hopping bass.
+// Timing, articulation and register for both tunes come from measuring the
+// recording: notes step every ~5 ticks (81 ms) and sound for about 84% of the
+// step, the lead sits between roughly 205 and 1055 Hz, and the bass alternates
+// around a 59 Hz median. The melodies themselves are original — the arcade's
+// tunes are copyrighted music and are not reproduced here.
+const STEP = 5, GATE = 4;
+
+function tuneVoice(notes, vol) {
+  const p = [];
+  for (const [semi, steps] of notes) {
+    if (semi === null) { p.push(rest(steps * STEP)); continue; }
+    p.push(seg(NOTE(semi), 0, steps * STEP - (STEP - GATE), vol, 'lead'));
+    p.push(rest(STEP - GATE));
+  }
+  return p;
+}
+
+// Start-up jingle: rising arpeggio figures that climb, then a closing run.
 function jingleLead() {
-  const E = 9;
-  const n = (semi, ticks) => seg(NOTE(semi), 0, ticks, 0.15, 'lead');
-  const p = [];
-  const phrase = (a, b, c, d) => {
-    p.push(n(a, E), n(b, E), n(c, E), n(d, E), n(c, E), n(b, E), n(a, E * 2), rest(E));
+  const notes = [];
+  const figure = (root) => {
+    for (const iv of [0, 4, 7, 12, 7, 4]) notes.push([root + iv, 1]);
+    notes.push([root, 2]);
   };
-  phrase(3, 7, 10, 15);
-  phrase(5, 9, 12, 17);
-  phrase(3, 7, 10, 15);
-  for (const s of [7, 8, 9, 10, 11, 12]) p.push(n(s, 6));
-  p.push(n(15, E * 3));
-  return p;
+  figure(-13); figure(-11); figure(-8); figure(-6);
+  for (const s of [-1, 1, 3, 5, 7, 9, 11, 13]) notes.push([s, 1]);
+  notes.push([15, 3], [null, 1]);
+  return tuneVoice(notes, 0.15);
 }
 
-// Intermission tune: lighter and bouncier than the start jingle, so the
-// coffee breaks do not simply replay the opening.
+// Intermission tune: a lighter, skipping figure so the coffee breaks do not
+// simply replay the opening.
 function intermissionLead() {
-  const n = (semi, ticks) => seg(NOTE(semi), 0, ticks, 0.14, 'lead');
-  const p = [];
-  const skip = (a, b) => p.push(n(a, 7), rest(2), n(b, 7), rest(2));
-  skip(10, 14); skip(12, 15); skip(10, 14); skip(7, 12);
-  p.push(n(9, 10), rest(3), n(11, 10), rest(3), n(12, 20), rest(8));
-  skip(12, 17); skip(14, 19); skip(12, 17); skip(9, 14);
-  p.push(n(10, 10), rest(3), n(12, 10), rest(3), n(15, 26));
-  return p;
+  const notes = [];
+  const skip = (a, b) => notes.push([a, 1], [null, 1], [b, 1], [null, 1]);
+  skip(-6, -1); skip(-4, 1); skip(-6, -1); skip(-11, -6);
+  notes.push([-8, 2], [-6, 2], [-4, 3], [null, 1]);
+  skip(-1, 4); skip(1, 6); skip(-1, 4); skip(-6, -1);
+  notes.push([-4, 2], [-1, 2], [3, 4]);
+  return tuneVoice(notes, 0.14);
 }
 
+// Bass: the measured line alternates octaves around a ~59 Hz median, moving
+// half as often as the lead.
 function bassFor(totalTicks, low, high) {
   const p = [];
-  let t = 0, alt = true;
+  let t = 0, i = 0;
   while (t < totalTicks) {
-    p.push(seg(NOTE(alt ? low : high), 0, 9, 0.18, 'tri'), rest(5));
-    t += 14;
-    alt = !alt;
+    // Two beats low to one high, so the line's median sits on the low note
+    // the way the measured bass does.
+    p.push(seg(NOTE(i % 3 === 2 ? high : low), 0, 2 * STEP - 2, 0.18, 'tri'), rest(2));
+    t += 2 * STEP;
+    i++;
   }
   return p;
 }
@@ -312,13 +329,13 @@ export class AudioEngine {
     if (!this.live) return;
     const lead = jingleLead();
     this.melody.play(lead);
-    this.fx.play(bassFor(progLength(lead), -33, -21));
+    this.fx.play(bassFor(progLength(lead), -35, -23)); // ~58 / 117 Hz
   }
 
   intermission() {
     if (!this.live) return;
     const lead = intermissionLead();
     this.melody.play(lead);
-    this.fx.play(bassFor(progLength(lead), -29, -17));
+    this.fx.play(bassFor(progLength(lead), -33, -21)); // ~65 / 131 Hz
   }
 }
