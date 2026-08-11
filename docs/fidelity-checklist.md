@@ -61,7 +61,7 @@ is which.
 | **Random number sequence** | The original's PRNG state is in the program ROM, which this project does not run. Pattern strategies from the arcade will not transfer. | `src/ghosts.js` |
 | **Siren stages 1-4** | Only the base cycle is captured. The waveform, volume and 24-tick period are the original's; the per-stage rise in pitch and rate is by ear. | `src/audio.js` |
 | **Eyes-returning, energizer, extend and coin sounds** | No register capture covers them. They use the ROM waveforms and the same register model, but their contours are chosen by ear. | `src/audio.js` |
-| **Coffee-break tune** | No capture exists, so this is an original composition in the machine's voice. | `src/audio.js` |
+| **Coffee-break tune** | No capture exists, so the melody is an original composition. Its timing, articulation and register are measured from a recording (5-tick steps, 84% gate, the bass moving half as often); only the tune itself is invented. | `src/audio.js` |
 | The attract screen's small "PTS" face | The ROM packs it two characters to a tile; it is redrawn rather than unpacked. | `src/render.js` |
 | Kill-screen garbage layout | Drawn from real tile and colour codes, but which codes land where is this project's PRNG, not the original's corrupted memory. | `src/killscreen.js` |
 | Cutscene staging | Timings and positions are eyeballed from recordings. | `src/cutscenes.js` |

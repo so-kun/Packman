@@ -619,7 +619,7 @@ export class Game {
       drawSmallText(ctx, 'PTS', 15 * TILE, 24 * TILE + 3, COLORS.text);
       ctx.fillStyle = COLORS.dot; // drawText left the fill on the text colour
       ctx.beginPath();
-      ctx.arc(10 * TILE + 4, 27 * TILE + 4, 3.5, 0, Math.PI * 2);
+      ctx.arc(10 * TILE + 4, 27 * TILE + 4, 4, 0, Math.PI * 2);
       ctx.fill();
       drawText(ctx, '50', 12, 27, COLORS.text);
       drawSmallText(ctx, 'PTS', 15 * TILE, 27 * TILE + 3, COLORS.text);
@@ -660,7 +660,7 @@ export class Game {
     if (D.phase === 1 && (this.tick % 20) < 10) {
       ctx.fillStyle = COLORS.dot;
       ctx.beginPath();
-      ctx.arc(DEMO_PILL_X, DEMO_Y, 3.5, 0, Math.PI * 2);
+      ctx.arc(DEMO_PILL_X, DEMO_Y, 4, 0, Math.PI * 2);
       ctx.fill();
     }
     // Pac (hidden while a ghost score is showing, as in gameplay)
