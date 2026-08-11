@@ -13,7 +13,7 @@ import { Pac } from './actors.js';
 import {
   makeGhosts, HouseController, MODE, GSTATE, updateElroy, seedRng,
 } from './ghosts.js';
-import { Renderer, drawText } from './render.js';
+import { Renderer, drawText, drawSmallText } from './render.js';
 import {
   isKillScreen, HIDDEN_DOTS, drawKillScreenGarbage, drawGarbageTiles,
 } from './killscreen.js';
@@ -35,9 +35,18 @@ const STATE = {
 
 const HS_KEY = 'packman.highscore';
 
+// Character roster as it reads on the Japanese original: behaviour name,
+// then the nickname in quotes, padded with dashes to a common width.
+const ROSTER = [
+  { key: 'blinky', name: 'OIKAKE----', nick: '"AKABEI"', color: COLORS.blinky },
+  { key: 'pinky', name: 'MACHIBUSE--', nick: '"PINKY"', color: COLORS.pinky },
+  { key: 'inky', name: 'KIMAGURE--', nick: '"AOSUKE"', color: COLORS.inky },
+  { key: 'clyde', name: 'OTOBOKE---', nick: '"GUZUTA"', color: COLORS.clyde },
+];
+
 // Attract-mode demo chase: starts once the roster and point values are up.
 const DEMO_START = 960;
-const DEMO_Y = 19 * TILE + 4;
+const DEMO_Y = 20 * TILE + 4;
 const DEMO_PILL_X = 20;
 // After ~two loops of the chase demo, switch to the in-maze autoplay demo.
 const DEMO_PLAY_AT = DEMO_START + 1260;
@@ -591,33 +600,31 @@ export class Game {
     const r = this.renderer, ctx = r.ctx;
     r.drawHud(this);
     drawText(ctx, 'CHARACTER / NICKNAME', 4, 4, COLORS.text);
-    const roster = [
-      ['blinky', '-SHADOW', '"BLINKY"', COLORS.blinky],
-      ['pinky', '-SPEEDY', '"PINKY"', COLORS.pinky],
-      ['inky', '-BASHFUL', '"INKY"', COLORS.inky],
-      ['clyde', '-POKEY', '"CLYDE"', COLORS.clyde],
-    ];
     const step = 180;
-    roster.forEach((row, i) => {
+    ROSTER.forEach((row, i) => {
       const appear = 120 + i * step;
       if (this.stateTimer < appear) return;
-      r.blit(r.sprites.ghost[row[0]].RIGHT[0], 4 * TILE + 4, (6 + i * 3) * TILE + 4);
-      if (this.stateTimer > appear + 60) drawText(ctx, row[1], 6, 6 + i * 3, row[3]);
-      if (this.stateTimer > appear + 120) drawText(ctx, row[2], 17, 6 + i * 3, row[3]);
+      const ty = 6 + i * 3;
+      r.blit(r.sprites.ghost[row.key].RIGHT[0], 4 * TILE + 4, ty * TILE + 4);
+      if (this.stateTimer > appear + 60) drawText(ctx, row.name, 6, ty, row.color);
+      if (this.stateTimer > appear + 120) {
+        drawText(ctx, row.nick, 6 + row.name.length, ty, row.color);
+      }
     });
     if (this.stateTimer > 120 + 4 * step) {
       ctx.fillStyle = COLORS.dot;
-      ctx.fillRect(9 * TILE + 3, 23 * TILE + 3, 2, 2);
-      drawText(ctx, '10 PTS', 11, 23, COLORS.text);
+      ctx.fillRect(10 * TILE + 3, 24 * TILE + 3, 2, 2);
+      drawText(ctx, '10', 12, 24, COLORS.text);
+      drawSmallText(ctx, 'PTS', 15 * TILE, 24 * TILE + 3, COLORS.text);
+      ctx.fillStyle = COLORS.dot; // drawText left the fill on the text colour
       ctx.beginPath();
-      ctx.arc(9 * TILE + 4, 25 * TILE + 4, 3.5, 0, Math.PI * 2);
+      ctx.arc(10 * TILE + 4, 27 * TILE + 4, 3.5, 0, Math.PI * 2);
       ctx.fill();
-      drawText(ctx, '50 PTS', 11, 25, COLORS.text);
+      drawText(ctx, '50', 12, 27, COLORS.text);
+      drawSmallText(ctx, 'PTS', 15 * TILE, 27 * TILE + 3, COLORS.text);
     }
     if (this.demo) this.drawDemo();
-    // Historical notice as on the original attract screen (plain text; see
-    // README — this project is an unaffiliated tribute).
-    drawText(ctx, '@ 1980 NAMCO', 8, 29, COLORS.pink);
+    drawText(ctx, 'NAMCO', 11, 31, COLORS.pink);
     this.drawCredits();
   }
 
