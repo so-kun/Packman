@@ -5,9 +5,12 @@
 // which is what produces the characteristic stepped sweeps and abrupt decays
 // of arcade hardware rather than the smooth glides a plain oscillator gives.
 //
-// All waveforms and programs are original synthesis, tuned by ear against the
-// documented character of the arcade sounds — no ROM waveform data is used,
-// and the tunes are original compositions in period style.
+// The chomp, death, bonus and frightened programs are tuned to per-tick pitch
+// and harmonic measurements taken from recordings of the arcade machine (the
+// sirens and the ghost-eat slurp were not covered by those recordings and are
+// still by ear). Nothing here is ROM data: the waveforms are rebuilt from
+// measured harmonic ratios, and both tunes are original compositions — the
+// arcade's start tune is a copyrighted piece of music and is not reproduced.
 
 const NOTE = (semisFromA4) => 440 * Math.pow(2, semisFromA4 / 12);
 
@@ -99,8 +102,11 @@ function sirenProg(stage) {
     sweep(base + range, base, down, 0.15, 'hollow'),
   ];
 }
-// Frightened: a rising-only wobble, low and fast.
-const FRIGHT_PROG = [sweep(130, 400, 9, 0.14, 'hollow')];
+// Frightened: measured as a descending sweep from ~2350 Hz to ~500 Hz over
+// 16 ticks, repeating — not the rising wobble this once used.
+const FRIGHT_PROG = [sweep(2350, 500, 16, 0.13, 'scared')];
+// Swallowing an energizer: one long rising sweep before the loop takes over.
+const EAT_ENERGIZER_PROG = [sweep(80, 1650, 26, 0.22, 'scared', -0.004)];
 // Eyes flying home: fast high whine.
 const EYES_PROG = [
   sweep(700, 1400, 9, 0.10, 'hollow'),
@@ -109,23 +115,34 @@ const EYES_PROG = [
 
 // --- effects ---------------------------------------------------------------
 
-// One chomp per dot, alternating a falling and a rising sweep. Short and
-// decaying so a fast run of dots reads as continuous munching.
-const WAKA_DOWN = [sweep(600, 140, 6, 0.30, 'buzz', -0.035)];
-const WAKA_UP = [sweep(140, 600, 6, 0.30, 'buzz', -0.035)];
+// One chomp per dot: a six-tick ramp between ~420 and ~980 Hz, alternating
+// direction, then a two-tick fade — measured straight off a recording of
+// continuous munching, where chomps land every ~7.5 ticks.
+const WAKA_UP = [
+  seg(433, 104, 6, 0.30, 'buzz', -0.015),  // measured 433,540,640,765,855,955
+  seg(975, -45, 2, 0.20, 'buzz', -0.09),
+];
+const WAKA_DOWN = [
+  seg(962, -105, 6, 0.30, 'buzz', -0.015), // measured 962,857,765,645,543,435
+  seg(430, 45, 2, 0.20, 'buzz', -0.09),
+];
 
 function deathProg() {
-  // Six warbles whose centre pitch steps down, then two rising puffs.
+  // Six warble cycles whose bounds step down together, then the two fast
+  // rising sweeps that finish it. Frequencies are the measured per-tick track.
+  const hi  = [725, 677, 629, 637, 579, 517];
+  const lo  = [633, 564, 520, 476, 433, 382];
+  const top = [767, 694, 638, 595, 552, 414];
   const p = [];
-  const centres = [880, 750, 620, 500, 390, 290];
-  for (let i = 0; i < centres.length; i++) {
-    p.push(sweep(centres[i] + 150, centres[i] - 70, 10, 0.24 - i * 0.012));
-    p.push(rest(2));
+  for (let i = 0; i < 6; i++) {
+    p.push(sweep(hi[i], lo[i], 5, 0.26, 'pure'));
+    p.push(sweep(lo[i], top[i], 6, 0.26, 'pure'));
   }
-  p.push(rest(8));
-  p.push(sweep(70, 430, 7, 0.26, 'buzz', -0.02));
-  p.push(rest(7));
-  p.push(sweep(70, 430, 7, 0.26, 'buzz', -0.02));
+  p.push(rest(1));
+  for (let i = 0; i < 2; i++) {
+    p.push(seg(190, 187, 11, 0.28, 'pure', -0.014)); // measured ~187 Hz/tick
+    p.push(rest(1));
+  }
   return p;
 }
 
@@ -136,8 +153,8 @@ const EAT_GHOST_PROG = [
 ];
 
 const EAT_FRUIT_PROG = [
-  sweep(520, 180, 7, 0.26),
-  sweep(180, 620, 9, 0.24, 'buzz', -0.012),
+  sweep(515, 50, 11, 0.26, 'soft'),
+  sweep(50, 610, 12, 0.26, 'soft', -0.005),
 ];
 
 function extraLifeProg() {
@@ -224,14 +241,17 @@ export class AudioEngine {
     // Hand-built harmonic recipes approximating small wavetable timbres.
     const mk = (harm) => this.ctx.createPeriodicWave(
       new Float32Array(harm), new Float32Array(harm.length));
+    // Harmonic recipes measured from arcade recordings (see MEASUREMENTS in
+    // README): the chomp is harmonically dense, while the death, bonus and
+    // frightened voices are close to a pure tone.
     this.waves = {
-      // bright and buzzy (chomps, effects): dense odd+even harmonics
-      buzz: mk([0, 1, 0.7, 0.9, 0.5, 0.62, 0.34, 0.4, 0.2, 0.24, 0.12, 0.14]),
-      // rounder hollow tone (sirens): mostly odd harmonics
+      buzz: mk([0, 1, 0.44, 0.24, 0.40, 0.13, 0.07, 0.05, 0.09, 0.05, 0.07]),
+      pure: mk([0, 1, 0.06, 0.09, 0.02, 0.03, 0.01]),
+      soft: mk([0, 1, 0.10, 0.19, 0.06, 0.06, 0.04, 0.03]),
+      scared: mk([0, 1, 0.15, 0.06, 0.03]),
+      // sirens (not covered by the recordings, so still tuned by ear)
       hollow: mk([0, 1, 0.06, 0.52, 0.05, 0.3, 0.03, 0.15, 0, 0.07]),
-      // lead voice for the tunes
-      lead: mk([0, 1, 0.45, 0.62, 0.24, 0.32, 0.12, 0.14]),
-      // soft triangle-ish bass
+      lead: mk([0, 1, 0.48, 0.30, 0.25, 0.15, 0.19, 0.23, 0.24, 0.27, 0.66]),
       tri: mk([0, 1, 0, 0.12, 0, 0.045, 0, 0.02]),
     };
     this.fx = new Voice(this.ctx, this.waves, this.master);      // effects
@@ -280,6 +300,7 @@ export class AudioEngine {
   }
 
   eatGhost() { if (this.live) this.fx.play(EAT_GHOST_PROG); }
+  eatEnergizer() { if (this.live) this.fx.play(EAT_ENERGIZER_PROG); }
   eatFruit() { if (this.live) this.fx.play(EAT_FRUIT_PROG); }
   // The extend fanfare rides the (otherwise idle) melody voice so rapid
   // chomps don't cut it short.

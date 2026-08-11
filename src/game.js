@@ -397,7 +397,8 @@ export class Game {
   eatAtPac() {
     const d = this.maze.eatDotAt(this.pac.tileX, this.pac.tileY);
     if (!d) return;
-    this.audio.waka();
+    if (d === 1) this.audio.waka();
+    else this.audio.eatEnergizer();
     this.house.onDotEaten();
     const eaten = this.maze.totalDots - this.maze.dotsLeft;
     if (eaten === FRUIT_DOTS[0] || eaten === FRUIT_DOTS[1]) this.spawnFruit();
