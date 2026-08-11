@@ -4,7 +4,7 @@
 // counter and its level-256 kill screen.
 
 import {
-  TILE, DIR, SCORE, EXTRA_LIFE_AT, START_LIVES, T, COLORS,
+  TILE, WIDTH, DIR, SCORE, EXTRA_LIFE_AT, START_LIVES, T, COLORS,
   levelSpec, scatterChaseSchedule, houseDotLimits, noDotTimerTicks,
   fruitForLevel, FRUIT_DOTS, FRUIT_TICKS, FRUIT_POS,
 } from './constants.js';
@@ -29,6 +29,11 @@ const STATE = {
 };
 
 const HS_KEY = 'packman.highscore';
+
+// Attract-mode demo chase: starts once the roster and point values are up.
+const DEMO_START = 960;
+const DEMO_Y = 19 * TILE + 4;
+const DEMO_PILL_X = 20;
 
 export class Game {
   constructor(canvas, input, audio) {
@@ -65,6 +70,7 @@ export class Game {
   toAttract() {
     this.state = STATE.ATTRACT;
     this.stateTimer = 0;
+    this.demo = null;
     this.score = 0;
     this.lives = 0;
     this.level = 1;
@@ -142,10 +148,60 @@ export class Game {
 
   updateAttract() {
     this.stateTimer++;
+    if (this.stateTimer >= DEMO_START) {
+      if (!this.demo) this.initDemo();
+      this.stepDemo();
+    }
     if (this.input.consumeStart()) {
       this.audio.resume();
       this.audio.credit();
       this.newGame();
+    }
+  }
+
+  // Attract-mode demo: the ghost train chases Pac leftward, he eats the
+  // energizer, and the tables turn — 200/400/800/1600 as he eats them back.
+  initDemo() {
+    this.demo = {
+      phase: 1, // 1 = chased left, 2 = frightened chase right
+      pacX: WIDTH + 16,
+      pacFrame: 0,
+      chain: 0,
+      freeze: 0,
+      donePause: 0,
+      score: null, // {x, points, timer}
+      ghosts: ['blinky', 'pinky', 'inky', 'clyde'].map((name, i) => ({
+        name, x: WIDTH + 44 + i * 18, eaten: false,
+      })),
+    };
+  }
+
+  stepDemo() {
+    const D = this.demo;
+    if (D.score && --D.score.timer <= 0) D.score = null;
+    if (D.phase === 1) {
+      D.pacX -= 1.25;
+      D.pacFrame += 0.32;
+      for (const g of D.ghosts) g.x -= 1.25;
+      if (D.pacX <= DEMO_PILL_X) { D.phase = 2; }
+    } else {
+      // Frightened ghosts crawl right; Pac runs them down one by one.
+      for (const g of D.ghosts) if (!g.eaten) g.x += 0.3;
+      if (D.freeze > 0) {
+        D.freeze--;
+      } else {
+        D.pacX += 1.5;
+        D.pacFrame += 0.34;
+        const next = D.ghosts.filter(g => !g.eaten).sort((a, b) => a.x - b.x)[0];
+        if (next && D.pacX >= next.x) {
+          next.eaten = true;
+          const points = SCORE.GHOST[Math.min(D.chain, 3)];
+          D.chain++;
+          D.score = { x: next.x, points, timer: 40 };
+          D.freeze = 40;
+        }
+      }
+      if (D.pacX > WIDTH + 24 && ++D.donePause > 90) this.initDemo();
     }
   }
 
@@ -441,11 +497,39 @@ export class Game {
       ctx.fill();
       drawText(ctx, '50 PTS', 11, 25, COLORS.text);
     }
+    if (this.demo) this.drawDemo();
     if ((this.tick % 60) < 40) {
       drawText(ctx, 'PRESS START', 8, 29, COLORS.orange);
     }
     drawText(ctx, 'A TRIBUTE TO THE 1980', 3, 31, COLORS.pink);
     drawText(ctx, 'NAMCO ARCADE ORIGINAL', 3, 32, COLORS.pink);
+  }
+
+  drawDemo() {
+    const r = this.renderer, ctx = r.ctx;
+    const D = this.demo;
+    const anim = (this.tick >> 3) & 1;
+    // the demo energizer, blinking until eaten
+    if (D.phase === 1 && (this.tick % 20) < 10) {
+      ctx.fillStyle = COLORS.dot;
+      ctx.beginPath();
+      ctx.arc(DEMO_PILL_X, DEMO_Y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Pac (hidden while a ghost score is showing, as in gameplay)
+    if (D.freeze === 0) {
+      const dirName = D.phase === 1 ? 'LEFT' : 'RIGHT';
+      const phase = Math.floor(D.pacFrame) % 4;
+      const sprite = phase === 3 ? r.sprites.pacClosed
+        : r.sprites.pac[dirName][phase === 1 ? 1 : 0];
+      r.blit(sprite, D.pacX, DEMO_Y);
+    }
+    for (const g of D.ghosts) {
+      if (g.eaten) continue;
+      if (D.phase === 1) r.blit(r.sprites.ghost[g.name].LEFT[anim], g.x, DEMO_Y);
+      else r.blit(r.sprites.fright[anim], g.x, DEMO_Y);
+    }
+    if (D.score) r.blit(r.sprites.score[D.score.points], D.score.x, DEMO_Y);
   }
 }
 
