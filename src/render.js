@@ -504,13 +504,13 @@ export class Renderer {
 
   drawHud(game) {
     const ctx = this.ctx;
-    drawText(ctx, '1UP', 3, 0, COLORS.text);
+    // The active player's "1UP" label blinks during play; the score itself
+    // stays on screen (matches the arcade original).
+    const inGame = game.state && game.state !== 'attract';
+    if (!inGame || (game.tick % 32) < 16) drawText(ctx, '1UP', 3, 0, COLORS.text);
     drawText(ctx, 'HIGH SCORE', 9, 0, COLORS.text);
-    const showScore = game.blink1up === false || (game.tick % 32) < 16;
-    if (showScore) {
-      const s = String(game.score === 0 ? '00' : game.score);
-      drawText(ctx, s.padStart(6, ' '), 1, 1, COLORS.text);
-    }
+    const s = String(game.score === 0 ? '00' : game.score);
+    drawText(ctx, s.padStart(6, ' '), 1, 1, COLORS.text);
     const hs = String(game.highScore === 0 ? '00' : game.highScore);
     drawText(ctx, hs.padStart(6, ' '), 11, 1, COLORS.text);
     // lives (bottom-left)

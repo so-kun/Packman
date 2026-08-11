@@ -38,7 +38,6 @@ export class Game {
     this.audio = audio;
     this.highScore = Number(localStorage.getItem(HS_KEY) || 0);
     this.tick = 0;
-    this.blink1up = true;
     this.toAttract();
   }
 
