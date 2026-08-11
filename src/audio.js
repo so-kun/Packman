@@ -156,6 +156,7 @@ export class AudioEngine {
   constructor() {
     this.ctx = null;
     this.muted = false;
+    this.suppressed = false; // true during attract-mode demo play (silent)
     this.loopMode = 'none';
     this.sirenLevel = -1;
     this.wakaFlip = false;
@@ -200,6 +201,7 @@ export class AudioEngine {
   }
 
   setLoop(mode, sirenLevel = 0) {
+    if (this.suppressed) mode = 'none';
     if (!this.ctx) { this.loopMode = mode; this.sirenLevel = sirenLevel; return; }
     if (mode === this.loopMode && sirenLevel === this.sirenLevel) return;
     this.loopMode = mode;
@@ -219,23 +221,25 @@ export class AudioEngine {
   }
 
   waka() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.suppressed) return;
     this.wakaFlip = !this.wakaFlip;
     // Don't cut an in-flight chomp for smoother continuous munching.
     if (this.fx.prog && this.fx.prog === (this.wakaFlip ? WAKA_UP : WAKA_DOWN)) return;
     this.fx.play(this.wakaFlip ? WAKA_DOWN : WAKA_UP);
   }
 
-  eatGhost() { if (this.ctx) this.fx.play(EAT_GHOST_PROG); }
-  eatFruit() { if (this.ctx) this.fx.play(EAT_FRUIT_PROG); }
+  get live() { return this.ctx && !this.suppressed; }
+
+  eatGhost() { if (this.live) this.fx.play(EAT_GHOST_PROG); }
+  eatFruit() { if (this.live) this.fx.play(EAT_FRUIT_PROG); }
   // The extend fanfare rides the (otherwise idle) melody voice so rapid
   // waka chomps don't cut it short.
-  extraLife() { if (this.ctx) this.melody.play(extraLifeProg()); }
-  credit() { if (this.ctx) this.fx.play(CREDIT_PROG); }
-  death() { if (this.ctx) this.fx.play(deathProg()); }
+  extraLife() { if (this.live) this.melody.play(extraLifeProg()); }
+  credit() { if (this.live) this.fx.play(CREDIT_PROG); }
+  death() { if (this.live) this.fx.play(deathProg()); }
 
   intro() {
-    if (!this.ctx) return;
+    if (!this.live) return;
     const lead = jingleLead();
     const len = lead.reduce((a, s) => a + s.n, 0);
     this.melody.play(lead);

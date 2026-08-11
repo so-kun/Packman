@@ -14,10 +14,14 @@ import {
   makeGhosts, HouseController, MODE, GSTATE, updateElroy, seedRng,
 } from './ghosts.js';
 import { Renderer, drawText } from './render.js';
-import { isKillScreen, HIDDEN_DOTS, drawKillScreenGarbage } from './killscreen.js';
+import {
+  isKillScreen, HIDDEN_DOTS, drawKillScreenGarbage, drawGarbageTiles,
+} from './killscreen.js';
 import { Cutscene, cutsceneForLevel } from './cutscenes.js';
+import { demoDirection } from './demoai.js';
 
 const STATE = {
+  BOOT: 'boot',
   ATTRACT: 'attract',
   READY: 'ready',
   PLAY: 'play',
@@ -34,6 +38,11 @@ const HS_KEY = 'packman.highscore';
 const DEMO_START = 960;
 const DEMO_Y = 19 * TILE + 4;
 const DEMO_PILL_X = 20;
+// After ~two loops of the chase demo, switch to the in-maze autoplay demo.
+const DEMO_PLAY_AT = DEMO_START + 1260;
+// Power-on: garbage VRAM flicker, then a blank beat, then attract.
+const BOOT_GARBAGE_TICKS = 150;
+const BOOT_TICKS = 205;
 
 export class Game {
   constructor(canvas, input, audio) {
@@ -43,7 +52,7 @@ export class Game {
     this.audio = audio;
     this.highScore = Number(localStorage.getItem(HS_KEY) || 0);
     this.tick = 0;
-    this.toAttract();
+    this.toBoot();
   }
 
   // --- helpers ------------------------------------------------------------
@@ -55,6 +64,7 @@ export class Game {
   addScore(points) {
     const before = this.score;
     this.score += points;
+    if (this.demoMode) return; // demo score never grants lives or records
     if (before < EXTRA_LIFE_AT && this.score >= EXTRA_LIFE_AT) {
       this.lives++;
       this.audio.extraLife();
@@ -67,10 +77,25 @@ export class Game {
 
   // --- state transitions --------------------------------------------------
 
+  toBoot() {
+    // Power-on look: uninitialized video RAM garbage, then a blank beat.
+    this.state = STATE.BOOT;
+    this.stateTimer = 0;
+    this.demoMode = false;
+    this.score = 0;
+    this.lives = 0;
+    this.level = 1;
+    this.spec = levelSpec(1);
+    this.pac = new Pac(this.maze);
+    this.ghosts = makeGhosts(this.maze);
+  }
+
   toAttract() {
     this.state = STATE.ATTRACT;
     this.stateTimer = 0;
     this.demo = null;
+    this.demoMode = false;
+    this.audio.suppressed = false;
     this.score = 0;
     this.lives = 0;
     this.level = 1;
@@ -81,7 +106,21 @@ export class Game {
     this.audio.setLoop('none');
   }
 
+  // In-maze autoplay demo: real game rules, silent, one life, GAME OVER text.
+  startDemoPlay() {
+    this.demoMode = true;
+    this.audio.suppressed = true;
+    this.score = 0;
+    this.lives = 0;
+    this.level = 1;
+    this.startLevel(false);
+    this.state = STATE.PLAY; // no READY pause in the demo
+  }
+
   newGame() {
+    this.demoMode = false;
+    this.audio.suppressed = false;
+    this.demo = null;
     this.score = 0;
     this.lives = START_LIVES;
     this.level = 1;
@@ -134,6 +173,7 @@ export class Game {
     this.tick++;
     if (this.input.consumeMute()) this.audio.toggleMute();
     switch (this.state) {
+      case STATE.BOOT: this.updateBoot(); break;
       case STATE.ATTRACT: this.updateAttract(); break;
       case STATE.READY: this.updateReady(); break;
       case STATE.PLAY: this.updatePlay(); break;
@@ -146,11 +186,26 @@ export class Game {
     this.audio.update();
   }
 
+  updateBoot() {
+    this.stateTimer++;
+    if (this.input.consumeStart()) {
+      this.audio.resume();
+      this.audio.credit();
+      this.newGame();
+      return;
+    }
+    if (this.stateTimer >= BOOT_TICKS) this.toAttract();
+  }
+
   updateAttract() {
     this.stateTimer++;
     if (this.stateTimer >= DEMO_START) {
       if (!this.demo) this.initDemo();
       this.stepDemo();
+    }
+    if (this.stateTimer >= DEMO_PLAY_AT) {
+      this.startDemoPlay();
+      return;
     }
     if (this.input.consumeStart()) {
       this.audio.resume();
@@ -224,7 +279,19 @@ export class Game {
   }
 
   updatePlay() {
-    if (this.input.dir) this.pac.setWant(this.input.dir);
+    if (this.demoMode) {
+      // Pressing start during the demo begins a real game.
+      if (this.input.consumeStart()) {
+        this.audio.suppressed = false;
+        this.audio.resume();
+        this.audio.credit();
+        this.newGame();
+        return;
+      }
+      if ((this.tick & 3) === 0) this.pac.setWant(demoDirection(this));
+    } else if (this.input.dir) {
+      this.pac.setWant(this.input.dir);
+    }
 
     // mode scheduling (paused while frightened)
     if (this.frightTimer > 0) {
@@ -364,6 +431,7 @@ export class Game {
       this.audio.death();
     }
     if (this.stateTimer <= 0) {
+      if (this.demoMode) { this.toAttract(); return; }
       this.lives--;
       if (this.lives < 0) {
         this.state = STATE.GAME_OVER;
@@ -380,6 +448,7 @@ export class Game {
   updateLevelDone() {
     this.stateTimer--;
     if (this.stateTimer <= 0) {
+      if (this.demoMode) { this.toAttract(); return; }
       const cut = cutsceneForLevel(this.level);
       this.level++; // note: display/behavior wraps via killScreen check
       if (cut) {
@@ -411,6 +480,7 @@ export class Game {
   draw() {
     const r = this.renderer;
     r.clear();
+    if (this.state === STATE.BOOT) { this.drawBoot(); return; }
     if (this.state === STATE.ATTRACT) { this.drawAttract(); return; }
     if (this.state === STATE.CUTSCENE) { this.cutscene.draw(); return; }
 
@@ -425,6 +495,9 @@ export class Game {
     if (this.fruitScore) {
       drawText(r.ctx, String(this.fruitScore.points), 12, 20, COLORS.pink);
     }
+    // The autoplay demo runs under a standing GAME OVER banner, as on the
+    // real machine's attract loop.
+    if (this.demoMode) drawText(r.ctx, 'GAME  OVER', 9, 20, COLORS.red);
 
     switch (this.state) {
       case STATE.READY:
@@ -503,6 +576,15 @@ export class Game {
     }
     drawText(ctx, 'A TRIBUTE TO THE 1980', 3, 31, COLORS.pink);
     drawText(ctx, 'NAMCO ARCADE ORIGINAL', 3, 32, COLORS.pink);
+  }
+
+  drawBoot() {
+    // Uninitialized-VRAM garbage that shuffles a few times, then a blank
+    // screen just before the attract mode begins.
+    if (this.stateTimer < BOOT_GARBAGE_TICKS) {
+      const seed = 0xBEEF + Math.floor(this.stateTimer / 15) * 7919;
+      drawGarbageTiles(this.renderer.ctx, 0, 28, seed, 82);
+    }
   }
 
   drawDemo() {

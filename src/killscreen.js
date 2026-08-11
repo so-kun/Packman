@@ -21,33 +21,38 @@ const PALETTE = [
   COLORS.yellow, COLORS.peach, COLORS.text, COLORS.wall,
 ];
 
+// Draw pseudo-random garbage tiles over columns [c0, c1). Used for the
+// level-256 corruption and for the power-on uninitialized-VRAM screen.
+export function drawGarbageTiles(ctx, c0, c1, seedIn, fillPct = 70) {
+  let seed = seedIn | 0 || 0xC0DE;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed >> 7; // discard low bits (poor randomness in an LCG)
+  };
+  for (let r = 0; r < ROWS; r++) {
+    for (let col = c0; col < c1; col++) {
+      const roll = rnd() % 100;
+      if (roll >= fillPct) continue; // some tiles stay black
+      const color = PALETTE[rnd() % PALETTE.length];
+      if (roll < fillPct * 0.74) {
+        const ch = CHARS[rnd() % CHARS.length];
+        drawText(ctx, ch, col, r, color);
+      } else {
+        // colored fragment blocks
+        ctx.fillStyle = color;
+        ctx.fillRect(col * TILE + (rnd() % 4), r * TILE + (rnd() % 4), 2 + (rnd() % 4), 2 + (rnd() % 3));
+      }
+    }
+  }
+}
+
 let cache = null;
 
 export function drawKillScreenGarbage(ctx) {
   if (!cache) {
     cache = document.createElement('canvas');
     cache.width = COLS * TILE; cache.height = ROWS * TILE;
-    const c = cache.getContext('2d');
-    let seed = 0xC0DE;
-    const rnd = () => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return seed >> 7; // discard low bits (poor randomness in an LCG)
-    };
-    for (let r = 0; r < ROWS; r++) {
-      for (let col = 14; col < COLS; col++) {
-        const roll = rnd() % 100;
-        if (roll < 30) continue; // some tiles stay black
-        const color = PALETTE[rnd() % PALETTE.length];
-        if (roll < 82) {
-          const ch = CHARS[rnd() % CHARS.length];
-          drawText(c, ch, col, r, color);
-        } else {
-          // colored fragment blocks
-          c.fillStyle = color;
-          c.fillRect(col * TILE + (rnd() % 4), r * TILE + (rnd() % 4), 2 + (rnd() % 4), 2 + (rnd() % 3));
-        }
-      }
-    }
+    drawGarbageTiles(cache.getContext('2d'), 14, COLS, 0xC0DE);
   }
   ctx.drawImage(cache, 0, 0);
 }

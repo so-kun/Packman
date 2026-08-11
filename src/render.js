@@ -505,8 +505,9 @@ export class Renderer {
   drawHud(game) {
     const ctx = this.ctx;
     // The active player's "1UP" label blinks during play; the score itself
-    // stays on screen (matches the arcade original).
-    const inGame = game.state && game.state !== 'attract';
+    // stays on screen (matches the arcade original). No blink in attract or
+    // during the autoplay demo — there is no active player then.
+    const inGame = game.state && game.state !== 'attract' && !game.demoMode;
     if (!inGame || (game.tick % 32) < 16) drawText(ctx, '1UP', 3, 0, COLORS.text);
     drawText(ctx, 'HIGH SCORE', 9, 0, COLORS.text);
     const s = String(game.score === 0 ? '00' : game.score);
