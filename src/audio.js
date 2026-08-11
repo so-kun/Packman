@@ -1,233 +1,238 @@
-// Web Audio sound engine, structured after the era's 3-voice wavetable sound
-// generators: three persistent voices whose frequency and volume are
-// re-programmed every 60 Hz tick from small parametric "effect programs"
-// (start frequency, per-tick frequency step, per-tick volume step, duration),
-// which is what produces the characteristic stepped sweeps and abrupt decays
-// of arcade hardware rather than the smooth glides a plain oscillator gives.
+// Sound: an emulation of the board's Namco 3-voice wavetable generator (WSG),
+// driven by the same register values the original writes.
 //
-// The chomp, death, bonus and frightened programs are tuned to per-tick pitch
-// and harmonic measurements taken from recordings of the arcade machine (the
-// sirens and the ghost-eat slurp were not covered by those recordings and are
-// still by ear). Nothing here is ROM data: the waveforms are rebuilt from
-// measured harmonic ratios, and both tunes are original compositions — the
-// arcade's start tune is a copyrighted piece of music and is not reproduced.
+// The WSG has no oscillators. Each voice owns a 20-bit accumulator that is
+// advanced by a frequency register at 96 kHz; the top five bits of that
+// accumulator index one of eight 32-entry waveforms held in a PROM, and the
+// 4-bit sample it finds there is multiplied by a 4-bit volume. That is the
+// whole chip. Because the waveforms come from ROM (src/romdata.js) and the
+// register values come from the game, the timbre here is the arcade timbre
+// rather than a synthesis that approximates it.
+//
+// Sounds are rendered to AudioBuffers on first use and then played back. The
+// two looping sounds have exact periods in game ticks, so their buffers loop
+// seamlessly. See docs/fidelity-checklist.md for what is taken from the
+// original and what is still guessed.
 
-const NOTE = (semisFromA4) => 440 * Math.pow(2, semisFromA4 / 12);
+import { WAVETABLE, SND_PRELUDE, SND_DEAD } from './romdata.js';
 
-// One program step: n ticks starting at f0 Hz, stepping df Hz and dv volume
-// each tick.
-function seg(f0, df, n, vol, wave = 'buzz', dv = 0) {
-  return { f0, df, n, vol, wave, dv };
-}
-function sweep(f0, f1, n, vol, wave = 'buzz', dv = 0) {
-  return seg(f0, (f1 - f0) / n, n, vol, wave, dv);
-}
-function rest(n) { return seg(0, 0, n, 0); }
+const TICK_HZ = 60;
+const WSG_CLOCK = 96000;          // accumulator updates per second
+const ACC_BITS = 20;              // one waveform cycle per full accumulator wrap
+const OVERSAMPLE = 4;
 
-class Voice {
-  constructor(ctx, waves, dest) {
-    this.ctx = ctx;
-    this.waves = waves;
-    this.osc = ctx.createOscillator();
-    this.gain = ctx.createGain();
-    this.gain.gain.value = 0;
-    this.osc.setPeriodicWave(waves.buzz);
-    this.osc.connect(this.gain).connect(dest);
-    this.osc.start();
-    this.prog = null;
-    this.idx = 0;
-    this.i = 0;
-    this.loop = false;
-    this.curWave = 'buzz';
+/** Frequency register value for a pitch in Hz — only used by the guessed sounds. */
+const REG = (hz) => Math.round((hz * (1 << ACC_BITS)) / WSG_CLOCK);
+
+// ---------------------------------------------------------------------------
+// Per-tick register programs
+//
+// Each entry is one 60 Hz tick: {f} frequency register, {w} waveform number,
+// {v} volume. These follow the original's own sound routines.
+
+/** Eating a dot: alternate ticks sweep down from 0x1500 and up from 0x0700. */
+function progEatDot(rising) {
+  const out = [];
+  let f = rising ? 0x0700 : 0x1500;
+  const step = rising ? 0x0300 : -0x0300;
+  for (let t = 0; t < 5; t++) {
+    out.push({ f, w: 2, v: 12 });
+    f += step;
   }
-
-  play(prog, loop = false) {
-    this.prog = prog;
-    this.idx = 0;
-    this.i = 0;
-    this.loop = loop;
-  }
-
-  stop() {
-    this.prog = null;
-    this.setGain(0);
-  }
-
-  // A hard jump in gain clicks; a very short ramp keeps the stepped character
-  // without the click.
-  setGain(v) {
-    this.gain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.003);
-  }
-
-  tick() {
-    if (!this.prog) return;
-    let s = this.prog[this.idx];
-    while (s && this.i >= s.n) {
-      this.idx++;
-      this.i = 0;
-      if (this.idx >= this.prog.length) {
-        if (this.loop) this.idx = 0;
-        else { this.stop(); return; }
-      }
-      s = this.prog[this.idx];
-    }
-    if (!s) { this.stop(); return; }
-    const vol = s.vol + s.dv * this.i;
-    if (vol <= 0 || s.f0 <= 0) {
-      this.setGain(0);
-    } else {
-      if (s.wave !== this.curWave && this.waves[s.wave]) {
-        this.osc.setPeriodicWave(this.waves[s.wave]);
-        this.curWave = s.wave;
-      }
-      this.osc.frequency.value = Math.max(20, Math.min(4000, s.f0 + s.df * this.i));
-      this.setGain(Math.min(0.4, vol));
-    }
-    this.i++;
-  }
+  return out;
 }
 
-// --- ambient loops ---------------------------------------------------------
-
-// Five siren stages: pitch and rate both climb as the board empties. Each
-// cycle glides up then drops back a little faster, which is what gives the
-// siren its lean rather than a symmetric warble.
-function sirenProg(stage) {
-  const base = 340 + stage * 105;
-  const range = 300 + stage * 30;
-  const up = 22 - stage * 2;
-  const down = 14 - stage;
-  return [
-    sweep(base, base + range, up, 0.15, 'hollow'),
-    sweep(base + range, base, down, 0.15, 'hollow'),
-  ];
-}
-// Frightened: measured as a descending sweep from ~2350 Hz to ~500 Hz over
-// 16 ticks, repeating — not the rising wobble this once used.
-const FRIGHT_PROG = [sweep(2350, 500, 16, 0.13, 'scared')];
-// Swallowing an energizer: one long rising sweep before the loop takes over.
-const EAT_ENERGIZER_PROG = [sweep(80, 1650, 26, 0.22, 'scared', -0.004)];
-// Eyes flying home: fast high whine.
-const EYES_PROG = [
-  sweep(700, 1400, 9, 0.10, 'hollow'),
-  sweep(1400, 700, 9, 0.10, 'hollow'),
-];
-
-// --- effects ---------------------------------------------------------------
-
-// One chomp per dot: a six-tick ramp between ~420 and ~980 Hz, alternating
-// direction, then a two-tick fade — measured straight off a recording of
-// continuous munching, where chomps land every ~7.5 ticks.
-const WAKA_UP = [
-  seg(433, 104, 6, 0.30, 'buzz', -0.015),  // measured 433,540,640,765,855,955
-  seg(975, -45, 2, 0.20, 'buzz', -0.09),
-];
-const WAKA_DOWN = [
-  seg(962, -105, 6, 0.30, 'buzz', -0.015), // measured 962,857,765,645,543,435
-  seg(430, 45, 2, 0.20, 'buzz', -0.09),
-];
-
-function deathProg() {
-  // Six warble cycles whose bounds step down together, then the two fast
-  // rising sweeps that finish it. Frequencies are the measured per-tick track.
-  const hi  = [725, 677, 629, 637, 579, 517];
-  const lo  = [633, 564, 520, 476, 433, 382];
-  const top = [767, 694, 638, 595, 552, 414];
-  const p = [];
-  for (let i = 0; i < 6; i++) {
-    p.push(sweep(hi[i], lo[i], 5, 0.26, 'pure'));
-    p.push(sweep(lo[i], top[i], 6, 0.26, 'pure'));
-  }
-  p.push(rest(1));
-  for (let i = 0; i < 2; i++) {
-    p.push(seg(190, 187, 11, 0.28, 'pure', -0.014)); // measured ~187 Hz/tick
-    p.push(rest(1));
-  }
-  return p;
+/** Eating a ghost: a rising slurp over 32 ticks. */
+function progEatGhost() {
+  const out = [];
+  for (let t = 0; t < 32; t++) out.push({ f: t * 0x20, w: 5, v: 12 });
+  return out;
 }
 
-// Gulp down, then the rising slurp as the ghost is swallowed.
-const EAT_GHOST_PROG = [
-  sweep(420, 150, 7, 0.24),
-  sweep(200, 1000, 22, 0.22, 'buzz', -0.004),
-];
+/** Eating fruit: down for 11 ticks, then back up. */
+function progEatFruit() {
+  const out = [];
+  let f = 0x1600;
+  for (let t = 0; t < 23; t++) {
+    out.push({ f, w: 6, v: 15 });
+    f += t < 10 ? -0x0200 : 0x0200;
+  }
+  return out;
+}
 
-const EAT_FRUIT_PROG = [
-  sweep(515, 50, 11, 0.26, 'soft'),
-  sweep(50, 610, 12, 0.26, 'soft', -0.005),
-];
+/**
+ * The siren. The original's cycle is 24 ticks — twelve up, twelve down — which
+ * makes the buffer loop exactly. Stage 0 is the board's own values; the later
+ * stages raise the base pitch and the step, which is the part still tuned by
+ * ear (the original speeds the siren up as the board empties).
+ */
+export function progSiren(stage) {
+  const base = 0x1000 + stage * 0x0300;
+  const step = 0x0200 + stage * 0x0060;
+  const out = [];
+  let f = base;
+  for (let t = 0; t < 24; t++) {
+    out.push({ f, w: 6, v: 6 });
+    f += (t % 24) < 11 ? step : -step;
+  }
+  return out;
+}
 
-function extraLifeProg() {
-  const p = [];
+/** Frightened: a rising ramp that resets every 8 ticks. */
+function progFrightened() {
+  const out = [];
+  for (let t = 0; t < 8; t++) out.push({ f: 0x0180 * (t + 1), w: 4, v: 10 });
+  return out;
+}
+
+// --- sounds the original has but no register capture covers ----------------
+// These use the ROM waveforms and the same register model, but their contours
+// are chosen by ear rather than taken from the game.
+
+/** Eyes flying home: a fast high two-tone whine, 16 ticks per cycle. */
+function progEyes() {
+  const out = [];
+  for (let t = 0; t < 16; t++) {
+    const f = t < 8 ? REG(1000) + t * REG(60) : REG(1420) - (t - 8) * REG(60);
+    out.push({ f, w: 6, v: 5 });
+  }
+  return out;
+}
+
+/** Swallowing an energizer: one long rise before the frightened loop starts. */
+function progEatEnergizer() {
+  const out = [];
+  for (let t = 0; t < 26; t++) {
+    out.push({ f: REG(90 + t * 62), w: 4, v: Math.max(4, 14 - (t >> 2)) });
+  }
+  return out;
+}
+
+/** The extend fanfare at 10000 points. */
+function progExtraLife() {
+  const out = [];
   for (let i = 0; i < 9; i++) {
-    p.push(sweep(1400, 900, 5, 0.16, 'hollow', -0.012));
-    p.push(rest(3));
+    for (let t = 0; t < 5; t++) out.push({ f: REG(1400 - t * 100), w: 6, v: 10 });
+    for (let t = 0; t < 3; t++) out.push({ f: 0, w: 6, v: 0 });
   }
-  return p;
+  return out;
 }
 
-const CREDIT_PROG = [seg(600, 0, 3, 0.24), seg(1000, 0, 7, 0.24, 'buzz', -0.02)];
+/** Coin insert. */
+function progCredit() {
+  const out = [];
+  for (let t = 0; t < 3; t++) out.push({ f: REG(600), w: 2, v: 13 });
+  for (let t = 0; t < 7; t++) out.push({ f: REG(1000), w: 2, v: 13 - t });
+  return out;
+}
 
-// --- tunes (original compositions) -----------------------------------------
-
-// Timing, articulation and register for both tunes come from measuring the
-// recording: notes step every ~5 ticks (81 ms) and sound for about 84% of the
-// step, the lead sits between roughly 205 and 1055 Hz, and the bass alternates
-// around a 59 Hz median. The melodies themselves are original — the arcade's
-// tunes are copyrighted music and are not reproduced here.
+// The coffee-break tune. Unlike the start tune, no register capture of it
+// exists, so the melody is an original composition. Its timing, articulation
+// and register are the measured ones: notes step every 5 ticks (81 ms) and
+// sound for four of them, and the bass moves half as often, two beats low to
+// one high so its median sits on the low note.
 const STEP = 5, GATE = 4;
+const NOTE_REG = (semi) => REG(440 * Math.pow(2, semi / 12));
 
-function tuneVoice(notes, vol) {
-  const p = [];
+function tuneVoice(notes, waveform, volume) {
+  const out = [];
   for (const [semi, steps] of notes) {
-    if (semi === null) { p.push(rest(steps * STEP)); continue; }
-    p.push(seg(NOTE(semi), 0, steps * STEP - (STEP - GATE), vol, 'lead'));
-    p.push(rest(STEP - GATE));
+    const ticks = steps * STEP;
+    for (let t = 0; t < ticks; t++) {
+      const sounding = semi !== null && t < ticks - (STEP - GATE);
+      out.push(sounding
+        ? { f: NOTE_REG(semi), w: waveform, v: volume }
+        : { f: 0, w: waveform, v: 0 });
+    }
   }
-  return p;
+  return out;
 }
 
-// Start-up jingle: rising arpeggio figures that climb, then a closing run.
-function jingleLead() {
-  const notes = [];
-  const figure = (root) => {
-    for (const iv of [0, 4, 7, 12, 7, 4]) notes.push([root + iv, 1]);
-    notes.push([root, 2]);
-  };
-  figure(-13); figure(-11); figure(-8); figure(-6);
-  for (const s of [-1, 1, 3, 5, 7, 9, 11, 13]) notes.push([s, 1]);
-  notes.push([15, 3], [null, 1]);
-  return tuneVoice(notes, 0.15);
+function bassVoice(totalTicks, low, high, waveform, volume) {
+  const out = [];
+  for (let i = 0; out.length < totalTicks; i++) {
+    const semi = i % 3 === 2 ? high : low;
+    for (let t = 0; t < 2 * STEP; t++) {
+      out.push(t < 2 * STEP - 2
+        ? { f: NOTE_REG(semi), w: waveform, v: volume }
+        : { f: 0, w: waveform, v: 0 });
+    }
+  }
+  return out.slice(0, totalTicks);
 }
 
-// Intermission tune: a lighter, skipping figure so the coffee breaks do not
-// simply replay the opening.
-function intermissionLead() {
+function progIntermission() {
   const notes = [];
   const skip = (a, b) => notes.push([a, 1], [null, 1], [b, 1], [null, 1]);
   skip(-6, -1); skip(-4, 1); skip(-6, -1); skip(-11, -6);
   notes.push([-8, 2], [-6, 2], [-4, 3], [null, 1]);
   skip(-1, 4); skip(1, 6); skip(-1, 4); skip(-6, -1);
   notes.push([-4, 2], [-1, 2], [3, 4]);
-  return tuneVoice(notes, 0.14);
+  const lead = tuneVoice(notes, 1, 9);
+  return [lead, bassVoice(lead.length, -29, -17, 0, 7)];
 }
 
-// Bass: the measured line alternates octaves around a ~59 Hz median, moving
-// half as often as the lead.
-function bassFor(totalTicks, low, high) {
-  const p = [];
-  let t = 0, i = 0;
-  while (t < totalTicks) {
-    // Two beats low to one high, so the line's median sits on the low note
-    // the way the measured bass does.
-    p.push(seg(NOTE(i % 3 === 2 ? high : low), 0, 2 * STEP - 2, 0.18, 'tri'), rest(2));
-    t += 2 * STEP;
-    i++;
+// ---------------------------------------------------------------------------
+// Register dumps
+//
+// One 32-bit word per voice per tick: bits 0-19 frequency, 24-26 waveform,
+// 28-31 volume. The prelude drives two voices, the death sound one.
+
+export function unpackDump(dump, numVoices) {
+  const ticks = dump.length / numVoices;
+  const voices = [];
+  for (let v = 0; v < numVoices; v++) voices.push([]);
+  for (let t = 0; t < ticks; t++) {
+    for (let v = 0; v < numVoices; v++) {
+      const word = dump[t * numVoices + v];
+      voices[v].push({
+        f: word & 0xfffff,
+        w: (word >> 24) & 7,
+        v: (word >> 28) & 0xf,
+      });
+    }
   }
-  return p;
+  return voices;
 }
 
-const progLength = (p) => p.reduce((a, s) => a + s.n, 0);
+// ---------------------------------------------------------------------------
+// Synthesis
+
+/**
+ * Render one or more per-tick register programs into interleaved mono samples.
+ * The accumulator arithmetic mirrors the hardware; oversampling then averaging
+ * takes the edge off the aliasing a 32-step wavetable would otherwise produce
+ * at browser sample rates.
+ */
+export function renderProgram(voicePrograms, sampleRate) {
+  const ticks = Math.max(...voicePrograms.map((p) => p.length));
+  const samplesPerTick = sampleRate / TICK_HZ;
+  const total = Math.round(ticks * samplesPerTick);
+  const out = new Float32Array(total);
+  const rate = sampleRate * OVERSAMPLE;
+  const accMask = (1 << ACC_BITS) - 1;
+
+  for (const prog of voicePrograms) {
+    let acc = 0;
+    for (let i = 0; i < total; i++) {
+      const step = prog[Math.min(Math.floor(i / samplesPerTick), prog.length - 1)];
+      if (!step || step.v === 0 || step.f === 0) continue;
+      // Advance the accumulator once per oversampled step and average.
+      const inc = (step.f * WSG_CLOCK) / rate;
+      let sum = 0;
+      for (let k = 0; k < OVERSAMPLE; k++) {
+        acc = (acc + inc) % (accMask + 1);
+        const index = (((step.w & 7) << 5) | ((acc >> 15) & 0x1f)) & 0xff;
+        sum += (WAVETABLE[index] & 0x0f) - 8;
+      }
+      // 8 is the sample magnitude, 15 the maximum volume.
+      out[i] += (sum / OVERSAMPLE) * step.v / (8 * 15);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 
 export class AudioEngine {
   constructor() {
@@ -237,6 +242,8 @@ export class AudioEngine {
     this.loopMode = 'none';
     this.sirenLevel = -1;
     this.wakaFlip = false;
+    this.buffers = new Map();
+    this.loopSource = null;
   }
 
   ensure() {
@@ -244,10 +251,10 @@ export class AudioEngine {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     this.ctx = new AC();
-    // Three voices summing into one bus clip easily; a gentle limiter keeps
-    // the mix clean when a chomp lands on top of the siren.
     this.master = this.ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 0.5;
+    // Three voices summing into one bus clip easily; a gentle limiter keeps
+    // the mix clean when a chomp lands on top of the siren.
     const comp = this.ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.knee.value = 6;
@@ -255,26 +262,25 @@ export class AudioEngine {
     comp.attack.value = 0.003;
     comp.release.value = 0.1;
     this.master.connect(comp).connect(this.ctx.destination);
-    // Hand-built harmonic recipes approximating small wavetable timbres.
-    const mk = (harm) => this.ctx.createPeriodicWave(
-      new Float32Array(harm), new Float32Array(harm.length));
-    // Harmonic recipes measured from arcade recordings (see MEASUREMENTS in
-    // README): the chomp is harmonically dense, while the death, bonus and
-    // frightened voices are close to a pure tone.
-    this.waves = {
-      buzz: mk([0, 1, 0.44, 0.24, 0.40, 0.13, 0.07, 0.05, 0.09, 0.05, 0.07]),
-      pure: mk([0, 1, 0.06, 0.09, 0.02, 0.03, 0.01]),
-      soft: mk([0, 1, 0.10, 0.19, 0.06, 0.06, 0.04, 0.03]),
-      scared: mk([0, 1, 0.15, 0.06, 0.03]),
-      // sirens (not covered by the recordings, so still tuned by ear)
-      hollow: mk([0, 1, 0.06, 0.52, 0.05, 0.3, 0.03, 0.15, 0, 0.07]),
-      lead: mk([0, 1, 0.48, 0.30, 0.25, 0.15, 0.19, 0.23, 0.24, 0.27, 0.66]),
-      tri: mk([0, 1, 0, 0.12, 0, 0.045, 0, 0.02]),
-    };
-    this.fx = new Voice(this.ctx, this.waves, this.master);      // effects
-    this.ambient = new Voice(this.ctx, this.waves, this.master); // siren etc.
-    this.melody = new Voice(this.ctx, this.waves, this.master);  // tunes
-    this.voices = [this.fx, this.ambient, this.melody];
+  }
+
+  /** Render (once) and cache the buffer for a named sound. */
+  buffer(name, build) {
+    let buf = this.buffers.get(name);
+    if (buf) return buf;
+    const samples = renderProgram(build(), this.ctx.sampleRate);
+    buf = this.ctx.createBuffer(1, samples.length, this.ctx.sampleRate);
+    buf.copyToChannel(samples, 0);
+    this.buffers.set(name, buf);
+    return buf;
+  }
+
+  play(name, build) {
+    if (!this.live) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this.buffer(name, build);
+    src.connect(this.master);
+    src.start();
   }
 
   setMuted(m) {
@@ -288,54 +294,52 @@ export class AudioEngine {
     if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
   }
 
+  stopLoop() {
+    if (this.loopSource) {
+      this.loopSource.stop();
+      this.loopSource = null;
+    }
+  }
+
   setLoop(mode, sirenLevel = 0) {
     if (this.suppressed) mode = 'none';
     if (!this.ctx) { this.loopMode = mode; this.sirenLevel = sirenLevel; return; }
     if (mode === this.loopMode && sirenLevel === this.sirenLevel) return;
     this.loopMode = mode;
     this.sirenLevel = sirenLevel;
-    switch (mode) {
-      case 'siren': this.ambient.play(sirenProg(sirenLevel), true); break;
-      case 'fright': this.ambient.play(FRIGHT_PROG, true); break;
-      case 'eyes': this.ambient.play(EYES_PROG, true); break;
-      default: this.ambient.stop();
-    }
+    this.stopLoop();
+    let buf = null;
+    if (mode === 'siren') buf = this.buffer(`siren${sirenLevel}`, () => [progSiren(sirenLevel)]);
+    else if (mode === 'fright') buf = this.buffer('fright', () => [progFrightened()]);
+    else if (mode === 'eyes') buf = this.buffer('eyes', () => [progEyes()]);
+    if (!buf) return;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.connect(this.master);
+    src.start();
+    this.loopSource = src;
   }
 
-  // One tick of the 60 Hz sequencer; call once per game update.
-  update() {
-    if (!this.ctx) return;
-    for (const v of this.voices) v.tick();
-  }
+  // Kept for the game loop's benefit: the sequencing now lives in the rendered
+  // buffers, so there is nothing to advance per tick.
+  update() {}
 
   get live() { return this.ctx && !this.suppressed; }
 
   waka() {
     if (!this.live) return;
     this.wakaFlip = !this.wakaFlip;
-    this.fx.play(this.wakaFlip ? WAKA_DOWN : WAKA_UP);
+    const rising = this.wakaFlip;
+    this.play(rising ? 'wakaUp' : 'wakaDown', () => [progEatDot(rising)]);
   }
 
-  eatGhost() { if (this.live) this.fx.play(EAT_GHOST_PROG); }
-  eatEnergizer() { if (this.live) this.fx.play(EAT_ENERGIZER_PROG); }
-  eatFruit() { if (this.live) this.fx.play(EAT_FRUIT_PROG); }
-  // The extend fanfare rides the (otherwise idle) melody voice so rapid
-  // chomps don't cut it short.
-  extraLife() { if (this.live) this.melody.play(extraLifeProg()); }
-  credit() { if (this.live) this.fx.play(CREDIT_PROG); }
-  death() { if (this.live) this.fx.play(deathProg()); }
-
-  intro() {
-    if (!this.live) return;
-    const lead = jingleLead();
-    this.melody.play(lead);
-    this.fx.play(bassFor(progLength(lead), -35, -23)); // ~58 / 117 Hz
-  }
-
-  intermission() {
-    if (!this.live) return;
-    const lead = intermissionLead();
-    this.melody.play(lead);
-    this.fx.play(bassFor(progLength(lead), -33, -21)); // ~65 / 131 Hz
-  }
+  eatGhost() { this.play('eatGhost', () => [progEatGhost()]); }
+  eatEnergizer() { this.play('eatEnergizer', () => [progEatEnergizer()]); }
+  eatFruit() { this.play('eatFruit', () => [progEatFruit()]); }
+  extraLife() { this.play('extraLife', () => [progExtraLife()]); }
+  credit() { this.play('credit', () => [progCredit()]); }
+  death() { this.play('death', () => unpackDump(SND_DEAD, 1)); }
+  intro() { this.play('prelude', () => unpackDump(SND_PRELUDE, 2)); }
+  intermission() { this.play('intermission', () => progIntermission()); }
 }
