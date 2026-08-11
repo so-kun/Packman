@@ -43,8 +43,12 @@ const ASCII = [
   '############################',
 ];
 
-// Tiles above which ghosts may not choose to turn upward (chase/scatter only).
-export const RESTRICTED_UP = new Set(['12,13', '15,13', '12,25', '15,25']);
+// Junction tiles where ghosts may not choose to turn upward (chase/scatter
+// only): in the corridor above the ghost house and on Pac's home row. These
+// must be the junction tiles themselves — one row further up are plain
+// vertical-corridor tiles, and banning "up" there would leave an upbound
+// ghost with no legal exit at all (a two-tile bounce loop).
+export const RESTRICTED_UP = new Set(['12,14', '15,14', '12,26', '15,26']);
 
 export const DOOR_TILES = [[13, 15], [14, 15]];
 export const HOUSE = {

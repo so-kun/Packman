@@ -43,12 +43,14 @@ export class Ghost extends Actor {
     this.dotCounter = 0;
     this.elroy = 0; // 0, 1 or 2 (blinky only)
     this.bobDir = 1;
+    this.lastDecideTile = null;
   }
 
   resetFor(level) {
     this.frightened = false;
     this.pendingReverse = false;
     this.elroy = 0;
+    this.lastDecideTile = null;
     if (this.name === 'blinky') {
       this.place(HOUSE.doorX, HOUSE.doorY, DIR.LEFT);
       this.state = GSTATE.OUTSIDE;
@@ -162,8 +164,15 @@ export class Ghost extends Actor {
     }
   }
 
-  // Direction decision at a tile center.
+  // Direction decision at a tile center. The hardware decides exactly once
+  // per tile; advance() may report the same center on consecutive ticks, and
+  // deciding again there would test the no-reverse rule against an already
+  // rewritten direction — letting ghosts effectively make 180° turns and
+  // oscillate between two tiles. Guard: one decision per tile visit.
   decide(game) {
+    const tileKey = `${this.tileX},${this.tileY}`;
+    if (tileKey === this.lastDecideTile) return;
+    this.lastDecideTile = tileKey;
     if (this.pendingReverse) {
       this.pendingReverse = false;
       const rev = OPPOSITE[this.dir.name];
@@ -206,16 +215,24 @@ export class Ghost extends Actor {
     }
   }
 
+  // Reversal signal from a mode change or energizer: outside ghosts reverse
+  // at the next tile center; ghosts in the house flip their bobbing.
+  reverseSignal() {
+    if (this.state === GSTATE.OUTSIDE) this.pendingReverse = true;
+    else if (this.state === GSTATE.IN_HOUSE) this.bobDir = -this.bobDir;
+  }
+
   frighten() {
     if (this.state === GSTATE.EYES || this.state === GSTATE.ENTERING) return;
     this.frightened = true;
-    if (this.state === GSTATE.OUTSIDE) this.pendingReverse = true;
+    this.reverseSignal();
   }
 
   eaten() {
     this.frightened = false;
     this.state = GSTATE.EYES;
     this.pendingReverse = false;
+    this.lastDecideTile = null; // the eyes re-plan from this tile
     // Snap to the tile center so pathing restarts cleanly.
     this.x = this.tileX * TILE + CENTER;
     this.y = this.tileY * TILE + CENTER;

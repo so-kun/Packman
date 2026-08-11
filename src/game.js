@@ -344,9 +344,7 @@ export class Game {
         this.phaseIndex++;
         this.phaseTimer = this.schedule[this.phaseIndex];
         this.mode = this.phaseIndex % 2 === 0 ? MODE.SCATTER : MODE.CHASE;
-        for (const g of this.ghostList()) {
-          if (g.state === GSTATE.OUTSIDE) g.pendingReverse = true;
-        }
+        for (const g of this.ghostList()) g.reverseSignal();
       }
     }
 
@@ -406,9 +404,7 @@ export class Game {
         for (const g of this.ghostList()) g.frighten();
       } else {
         // No frightened time on late levels — ghosts only reverse.
-        for (const g of this.ghostList()) {
-          if (g.state === GSTATE.OUTSIDE) g.pendingReverse = true;
-        }
+        for (const g of this.ghostList()) g.reverseSignal();
       }
     }
   }
