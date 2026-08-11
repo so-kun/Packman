@@ -72,22 +72,57 @@ test('two voices sum rather than replace each other', () => {
   assert.ok(duoPeak > soloPeak * 1.5, 'the second voice did not add');
 });
 
-test('the siren cycle closes on itself so its buffer can loop', () => {
-  const prog = progSiren(0);
-  assert.equal(prog.length, 24);
-  // Stage 0 starts at the value the original's routine sets.
-  assert.equal(prog[0].f, 0x1000);
-  assert.equal(prog[0].w, 6);
-  assert.equal(prog[0].v, 6);
-  // Continuing the recurrence one more tick must land back on the start.
-  const last = prog[23];
-  const step = 0x0200;
-  assert.equal(last.f + step, prog[0].f, 'the cycle does not return to its start');
-  // Later stages ride higher, which is how the original leans on the player.
-  assert.ok(progSiren(4)[0].f > progSiren(0)[0].f);
-  for (const stage of [0, 1, 2, 3, 4]) {
-    for (const s of progSiren(stage)) {
-      assert.ok(s.f > 0 && s.f < (1 << 20), `stage ${stage} frequency ${s.f} out of range`);
+test('the siren matches the five measured stages and loops cleanly', () => {
+  // Ranges measured off the five recordings, at the turn of each cycle.
+  const expected = [
+    { half: 12, low: 386, high: 928 },
+    { half: 11, low: 485, high: 1099 },
+    { half: 10, low: 577, high: 1247 },
+    { half: 9, low: 716, high: 1431 },
+    { half: 8, low: 855, high: 1582 },
+  ];
+  let previousLow = 0;
+  expected.forEach((want, stage) => {
+    const prog = progSiren(stage);
+    assert.equal(prog.length, want.half * 2, `stage ${stage} period`);
+    const hz = prog.map((s) => (s.f * 96000 * WAVEFORM_CYCLES[s.w]) / (1 << 20));
+    assert.ok(prog.every((s) => s.w === 6 && s.v === 6), `stage ${stage} voice settings`);
+
+    // Rises to the halfway point and falls back, so the ends meet.
+    const peak = hz.indexOf(Math.max(...hz));
+    assert.equal(peak, want.half, `stage ${stage} peaks at its half-period`);
+    const step = prog[1].f - prog[0].f;
+    assert.equal(prog[prog.length - 1].f - step, prog[0].f,
+      `stage ${stage} does not join back up`);
+
+    assert.ok(Math.abs(Math.min(...hz) - want.low) < 20,
+      `stage ${stage} bottoms at ${Math.min(...hz).toFixed(0)} Hz, measured ${want.low}`);
+    assert.ok(Math.abs(Math.max(...hz) - want.high) < 35,
+      `stage ${stage} peaks at ${Math.max(...hz).toFixed(0)} Hz, measured ${want.high}`);
+
+    // Each stage sits above the last: the siren leans on the player as the
+    // board empties, and hurries as well as climbing.
+    assert.ok(Math.min(...hz) > previousLow, `stage ${stage} should sit above stage ${stage - 1}`);
+    previousLow = Math.min(...hz);
+  });
+  // The step grows by exactly 0x80 a stage.
+  for (let stage = 1; stage < 5; stage++) {
+    const before = progSiren(stage - 1);
+    const after = progSiren(stage);
+    assert.equal((after[1].f - after[0].f) - (before[1].f - before[0].f), 0x80);
+  }
+});
+
+test('the extend fanfare is one struck pitch, not a tune', () => {
+  const [prog] = SOUND_PROGRAMS.extraLife();
+  const hz = prog.map((s) => (s.f * 96000 * WAVEFORM_CYCLES[s.w]) / (1 << 20));
+  assert.ok(hz.every((v) => Math.abs(v - 374) < 8), 'the pitch never moves');
+  assert.equal(prog.length % 12, 0, 'struck every twelve ticks');
+  // Each strike starts loud and decays, which is the envelope measured.
+  for (let i = 0; i < prog.length; i += 12) {
+    assert.equal(prog[i].v, 15, `strike at ${i} should start at full volume`);
+    for (let t = 1; t < 12; t++) {
+      assert.ok(prog[i + t].v < prog[i + t - 1].v, `tick ${i + t} should decay`);
     }
   }
 });

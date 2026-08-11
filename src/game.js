@@ -397,8 +397,10 @@ export class Game {
   eatAtPac() {
     const d = this.maze.eatDotAt(this.pac.tileX, this.pac.tileY);
     if (!d) return;
-    if (d === 1) this.audio.waka();
-    else this.audio.eatEnergizer();
+    // The original plays the same alternating crunch for an energizer as for
+    // a dot; the change of mood comes from the background switching to the
+    // frightened loop, not from a sound of its own.
+    this.audio.waka();
     this.house.onDotEaten();
     const eaten = this.maze.totalDots - this.maze.dotsLeft;
     if (eaten === FRUIT_DOTS[0] || eaten === FRUIT_DOTS[1]) this.spawnFruit();
