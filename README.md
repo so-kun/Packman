@@ -91,12 +91,18 @@ node tools/extract-music.mjs <pacman.rom> --check  # デコーダの検証
 ## 開発
 
 ```sh
-node --test 'test/*.test.mjs'      # ROMデコードとサウンド生成のテスト
-node tools/dump-gfx.mjs gfx.png    # デコードしたタイル/スプライトを画像に出力
-node tools/dump-audio.mjs out.wav  # 全効果音をWAVに出力
-node tools/shots.mjs shots         # ヘッドレスブラウザで画面キャプチャ (要 playwright)
-node tools/measure-sound.mjs a.mp3 # 実機録音の1tickごとの周波数・音量を実測
+npm test                     # ROMデコードとサウンド生成のテスト
+npm run serve                # ローカルサーバ (:8123) — shots に必要
+npm run shots -- <dir>       # ヘッドレスブラウザで9画面キャプチャ (要 playwright)
+npm run gfx -- gfx.png       # デコードしたタイル/スプライトを画像に出力
+npm run audio -- out.wav     # 全効果音をWAVに出力
+npm run measure -- a.mp3     # 実機録音の1tickごとの周波数・音量を実測
 ```
+
+作業の指針は `CLAUDE.md` にまとめてあります。繰り返し発生する作業は
+`.claude/skills/` の2つのスキル (**arcade-sound** — 録音から音を導出する、
+**rom-data** — ROMデータの抽出とデコード) に、守るべき方針は
+`.claude/rules/` に置いています。
 
 主な参考資料:
 
