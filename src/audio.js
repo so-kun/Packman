@@ -21,6 +21,12 @@ const TICK_HZ = 60;
 const WSG_CLOCK = 96000;          // accumulator updates per second
 const ACC_BITS = 20;              // one waveform cycle per full accumulator wrap
 const OVERSAMPLE = 4;
+const NUM_VOICES = 3;             // what the chip mixes into its single output
+// Dividing by three costs the same 3.5 dB everywhere, so the bus gives it
+// back. All three voices flat out would reach 1.5 and clip, but that never
+// happens: the loudest real moment is the siren under an effect, which lands
+// near 0.7. The limiter stays as a backstop rather than doing the work.
+const MASTER_GAIN = 1.5;
 
 /**
  * How many cycles each of the eight ROM waveforms completes inside its 32
@@ -229,8 +235,11 @@ export function renderProgram(voicePrograms, sampleRate) {
         const index = (((step.w & 7) << 5) | ((acc >> 15) & 0x1f)) & 0xff;
         sum += (WAVETABLE[index] & 0x0f) - 8;
       }
-      // 8 is the sample magnitude, 15 the maximum volume.
-      out[i] += (sum / OVERSAMPLE) * step.v / (8 * 15);
+      // 8 is the sample magnitude, 15 the maximum volume, and three is how
+      // many voices the chip sums into one output. Dividing by all three is
+      // what keeps a two-voice tune from arriving at almost twice full scale
+      // and leaning on the limiter for the whole of its four seconds.
+      out[i] += (sum / OVERSAMPLE) * step.v / (8 * 15 * NUM_VOICES);
     }
   }
   return out;
@@ -275,7 +284,7 @@ export class AudioEngine {
     if (!AC) return;
     this.ctx = new AC();
     this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.5;
+    this.master.gain.value = this.muted ? 0 : MASTER_GAIN;
     // Three voices summing into one bus clip easily; a gentle limiter keeps
     // the mix clean when a chomp lands on top of the siren.
     const comp = this.ctx.createDynamicsCompressor();
@@ -308,7 +317,7 @@ export class AudioEngine {
 
   setMuted(m) {
     this.muted = m;
-    if (this.master) this.master.gain.value = m ? 0 : 0.5;
+    if (this.master) this.master.gain.value = m ? 0 : MASTER_GAIN;
   }
   toggleMute() { this.setMuted(!this.muted); }
 

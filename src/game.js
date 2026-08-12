@@ -710,7 +710,15 @@ export class Game {
     // The ROM font has no underscore, so the cursor is drawn rather than set.
     ctx.fillStyle = COLORS.yellow;
     ctx.fillRect((left + this.namePos * 2) * TILE + 1, 21 * TILE + 1, TILE - 2, 2);
-    centred(`TIME ${Math.ceil(this.stateTimer / FPS)}`, 25, COLORS.peach);
+    // Without this the screen is a dead end: the player's instinct after a
+    // game is to press start, which here quietly moves to the next letter, so
+    // the game looks frozen and silent until the clock runs out.
+    const keys = [['UP DOWN', 'CHANGE'], ['START', 'NEXT']];
+    const keyCol = (COLS - 18) >> 1;
+    keys.forEach(([key, what], i) => {
+      drawText(ctx, key.padEnd(12) + what, keyCol, 23 + i * 2, COLORS.text);
+    });
+    centred(`TIME ${Math.ceil(this.stateTimer / FPS)}`, 27, COLORS.peach);
     this.drawCredits();
   }
 
