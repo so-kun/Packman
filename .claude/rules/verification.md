@@ -17,6 +17,16 @@ works). It drives the three coffee breaks directly rather than playing to board
 9, and puts the game into name entry rather than requiring a record-beating
 run, so both are visible without playing for an hour.
 
+Two things about browser audio that headless runs hide. Playwright launches
+Chromium with `--autoplay-policy=no-user-gesture-required`, so a run that
+proves sound works has proved nothing about a real browser — pass
+`ignoreDefaultArgs: ['--autoplay-policy=no-user-gesture-required']` when the
+question is whether audio starts at all. And a tab that was in the background
+when the game loaded gets an AudioContext that stays suspended: the game looks
+fine and is silent. `AudioEngine.live` refuses to emit into a stopped clock and
+`resume()` retries on every gesture and on `visibilitychange`, which is what
+makes it recover; the tests around `fakeContext` pin that.
+
 **Look at the screenshots.** They are the only check on layout and colour, and
 several real bugs here were invisible to the tests and obvious in an image: the
 ghost-house door rendering black, the maze drawn behind a cutscene.
