@@ -7,14 +7,15 @@ octave still sounds like a working effect. So the check is never "does it run".
 **Run both**, every time:
 
 ```sh
-npm test                 # 27 tests over the decode and the sound generator
-npm run shots -- <dir>   # nine screens headless; exits non-zero on any page error
+npm test                 # tests over the ROM decode, the sound generator and the record store
+npm run shots -- <dir>   # ten screens headless; exits non-zero on any page error
 ```
 
 `npm run shots` needs `npm run serve` in another shell and Playwright resolvable
 (`playwright` is a devDependency; in a sandbox a symlink to a global install
 works). It drives the three coffee breaks directly rather than playing to board
-9, so cutscene changes are visible without a long game.
+9, and puts the game into name entry rather than requiring a record-beating
+run, so both are visible without playing for an hour.
 
 **Look at the screenshots.** They are the only check on layout and colour, and
 several real bugs here were invisible to the tests and obvious in an image: the

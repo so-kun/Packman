@@ -62,6 +62,20 @@ for (const [index, at] of [[1, 120], [2, 260], [3, 340]]) {
   await shot(`0${6 + index}-cutscene${index}`);
 }
 
+// Name entry only appears after beating the stored record, so put the game
+// into it directly rather than playing a whole run.
+await page.evaluate(() => {
+  const game = window.__game;
+  game.record = { score: 0, name: '' };
+  game.score = 128760;
+  game.lives = -1;          // as it would be, arriving here from game over
+  game.toNameEntry();
+  game.nameLetters = ['P', 'A', 'C'];
+  game.namePos = 2;
+});
+await page.waitForTimeout(300);
+await shot('10-name-entry');
+
 console.log(errors.length ? `\nERRORS:\n${errors.join('\n')}` : '\nno page errors');
 await browser.close();
 process.exit(errors.length ? 1 : 0);

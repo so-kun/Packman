@@ -76,6 +76,21 @@ is which.
 | Cutscene staging | Timings and positions are eyeballed from recordings. | `src/cutscenes.js` |
 | Lives and fruit counters at the screen edges | Drawn from sprites; the original draws them from 2x2 tile blocks. Same picture, different mechanism. | `src/render.js` |
 
+## Added on purpose — not in the original at all
+
+These are deliberate departures, listed so nobody mistakes them for
+reproductions. The rest of this file is about matching the machine; this
+section is about where the project knowingly does not.
+
+| Item | What the original does | Where |
+|---|---|---|
+| **High score entered under a name** | Nothing of the kind. The complete text in the program ROM is HIGH SCORE, CREDIT, the roster, the service-mode strings and the copyright lines — there is no prompt to enter anything. | `src/record.js`, `src/game.js` |
+| **The high score surviving a reload** | The board's high score is in plain RAM and is gone the moment it is switched off. | `src/record.js` |
+| The record holder's initials on the attract screen | The attract screen has no such line. | `src/game.js` |
+
+The in-game HUD is deliberately left alone: the score row is what the arcade
+draws, and the added name appears only on the attract and entry screens.
+
 ## Not attempted
 
 Running the program ROM. The gameplay logic lives inside it, so an emulator

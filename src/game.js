@@ -4,7 +4,7 @@
 // counter and its level-256 kill screen.
 
 import {
-  TILE, WIDTH, DIR, SCORE, EXTRA_LIFE_AT, START_LIVES, T, COLORS,
+  TILE, COLS, WIDTH, FPS, DIR, SCORE, EXTRA_LIFE_AT, START_LIVES, T, COLORS,
   levelSpec, scatterChaseSchedule, houseDotLimits, noDotTimerTicks,
   fruitForLevel, FRUIT_DOTS, FRUIT_TICKS, FRUIT_POS,
 } from './constants.js';
@@ -19,6 +19,9 @@ import {
 } from './killscreen.js';
 import { Cutscene, cutsceneForLevel } from './cutscenes.js';
 import { demoDirection } from './demoai.js';
+import {
+  loadRecord, saveRecord, cycleLetter, sanitizeName, NAME_LENGTH, DEFAULT_NAME,
+} from './record.js';
 
 const STATE = {
   BOOT: 'boot',
@@ -31,9 +34,12 @@ const STATE = {
   LEVEL_DONE: 'levelDone',
   CUTSCENE: 'cutscene',
   GAME_OVER: 'gameOver',
+  NAME_ENTRY: 'nameEntry',
 };
 
-const HS_KEY = 'packman.highscore';
+// How long the player has to enter a name before it is accepted as it stands,
+// which is what an arcade does rather than waiting forever.
+const NAME_ENTRY_TICKS = 30 * FPS;
 
 // Character roster as it reads on the Japanese original: behaviour name,
 // then the nickname in quotes, padded with dashes to a common width.
@@ -60,7 +66,9 @@ export class Game {
     this.renderer = new Renderer(canvas, this.maze);
     this.input = input;
     this.audio = audio;
-    this.highScore = Number(localStorage.getItem(HS_KEY) || 0);
+    this.storage = (() => { try { return window.localStorage; } catch { return null; } })();
+    this.record = loadRecord(this.storage);
+    this.highScore = this.record.score;
     this.tick = 0;
     this.credits = 0;
     this.toBoot();
@@ -80,10 +88,9 @@ export class Game {
       this.lives++;
       this.audio.extraLife();
     }
-    if (this.score > this.highScore) {
-      this.highScore = this.score;
-      localStorage.setItem(HS_KEY, String(this.highScore));
-    }
+    // The board shows the high score climbing live but only commits it when
+    // the game ends, which is also when there is a name to commit with it.
+    if (this.score > this.highScore) this.highScore = this.score;
   }
 
   // --- state transitions --------------------------------------------------
@@ -227,6 +234,7 @@ export class Game {
       case STATE.LEVEL_DONE: this.updateLevelDone(); break;
       case STATE.CUTSCENE: this.updateCutscene(); break;
       case STATE.GAME_OVER: this.updateGameOver(); break;
+      case STATE.NAME_ENTRY: this.updateNameEntry(); break;
     }
     this.audio.update();
   }
@@ -522,9 +530,56 @@ export class Game {
     this.handleStartInputs();
     if (this.state !== STATE.GAME_OVER) return;
     if (this.stateTimer <= 0) {
-      if (this.credits > 0) this.toStartScreen();
+      if (this.score > this.record.score) this.toNameEntry();
+      else if (this.credits > 0) this.toStartScreen();
       else this.toAttract();
     }
+  }
+
+  // --- name entry ---------------------------------------------------------
+  //
+  // Not something the arcade does; see src/record.js. Laid out and driven like
+  // one that did: three initials, the stick to choose, the start button to
+  // move on, and a clock so an abandoned cabinet returns to attract.
+
+  toNameEntry() {
+    this.state = STATE.NAME_ENTRY;
+    this.stateTimer = NAME_ENTRY_TICKS;
+    this.nameLetters = (this.record.name.trim() ? sanitizeName(this.record.name) : DEFAULT_NAME).split('');
+    this.namePos = 0;
+    this.input.flush();
+    this.audio.setLoop('none');
+  }
+
+  updateNameEntry() {
+    this.stateTimer--;
+    let dir;
+    while ((dir = this.input.consumeDir())) {
+      if (dir === DIR.UP || dir === DIR.DOWN) {
+        this.nameLetters[this.namePos] = cycleLetter(
+          this.nameLetters[this.namePos], dir === DIR.UP ? 1 : -1,
+        );
+      } else if (dir === DIR.LEFT) {
+        this.namePos = Math.max(0, this.namePos - 1);
+      } else if (dir === DIR.RIGHT) {
+        this.namePos = Math.min(NAME_LENGTH - 1, this.namePos + 1);
+      }
+    }
+    // The start button advances, and finishes on the last letter. A tap does
+    // the same, so the entry is usable without a keyboard.
+    if (this.input.consumeStart() || this.input.consumeTap()) {
+      if (this.namePos < NAME_LENGTH - 1) this.namePos++;
+      else this.finishNameEntry();
+      return;
+    }
+    if (this.stateTimer <= 0) this.finishNameEntry();
+  }
+
+  finishNameEntry() {
+    this.record = saveRecord(this.storage, this.score, this.nameLetters.join(''));
+    this.highScore = this.record.score;
+    if (this.credits > 0) this.toStartScreen();
+    else this.toAttract();
   }
 
   // --- drawing ------------------------------------------------------------
@@ -535,6 +590,7 @@ export class Game {
     if (this.state === STATE.BOOT) { this.drawBoot(); return; }
     if (this.state === STATE.ATTRACT) { this.drawAttract(); return; }
     if (this.state === STATE.START_SCREEN) { this.drawStartScreen(); return; }
+    if (this.state === STATE.NAME_ENTRY) { this.drawNameEntry(); return; }
     if (this.state === STATE.CUTSCENE) { this.cutscene.draw(); return; }
 
     const flashing = this.state === STATE.LEVEL_DONE && this.stateTimer < T.LEVEL_FLASH;
@@ -627,8 +683,34 @@ export class Game {
       drawSmallText(ctx, 'PTS', 15 * TILE, 27 * TILE + 3, COLORS.text);
     }
     if (this.demo) this.drawDemo();
+    if (this.record.name.trim() && this.record.score > 0) {
+      const line = `${this.record.name}  ${this.record.score}`;
+      drawText(ctx, line, (COLS - line.length) >> 1, 21, COLORS.peach);
+    }
     // Seven tiles wide, so it centres one tile left of where text would start.
     drawNamco(ctx, 10, 31);
+    this.drawCredits();
+  }
+
+  drawNameEntry() {
+    const r = this.renderer, ctx = r.ctx;
+    r.drawHud(this);
+    const centred = (text, row, colour) => drawText(ctx, text, (COLS - text.length) >> 1, row, colour);
+    centred('NEW HIGH SCORE', 9, COLORS.yellow);
+    centred(String(this.score), 12, COLORS.text);
+    centred('ENTER YOUR NAME', 16, COLORS.cyan);
+    // Letters spaced two tiles apart so the blinking cursor has room.
+    const left = (COLS - (NAME_LENGTH * 2 - 1)) >> 1;
+    this.nameLetters.forEach((ch, i) => {
+      const col = left + i * 2;
+      // The letter being edited blinks, which is how you can tell where you are.
+      if (i === this.namePos && (this.tick >> 3) & 1) return;
+      drawText(ctx, ch, col, 20, i === this.namePos ? COLORS.yellow : COLORS.text);
+    });
+    // The ROM font has no underscore, so the cursor is drawn rather than set.
+    ctx.fillStyle = COLORS.yellow;
+    ctx.fillRect((left + this.namePos * 2) * TILE + 1, 21 * TILE + 1, TILE - 2, 2);
+    centred(`TIME ${Math.ceil(this.stateTimer / FPS)}`, 25, COLORS.peach);
     this.drawCredits();
   }
 
