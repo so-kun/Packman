@@ -14,10 +14,16 @@ const input = new Input(window);
 const game = new Game(canvas, input, audio);
 window.__game = game; // debug/testing handle
 
-// Unlock audio on the first user gesture.
+// Unlock audio on any user gesture, and again whenever the page comes back
+// into view. A tab that was in the background when the game loaded keeps its
+// audio context suspended through the first keypress, which looks exactly like
+// the sound being broken until you switch tabs and it starts working.
 for (const ev of ['keydown', 'pointerdown', 'touchstart']) {
   window.addEventListener(ev, () => audio.resume(), { once: false, passive: true });
 }
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) audio.resume();
+});
 
 function fitCanvas() {
   const scale = Math.max(1, Math.floor(Math.min(

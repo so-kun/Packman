@@ -276,6 +276,7 @@ export class AudioEngine {
     this.wakaFlip = false;
     this.buffers = new Map();
     this.loopSource = null;
+    this.loopPlaying = null;  // which buffer the loop source is actually playing
   }
 
   ensure() {
@@ -321,9 +322,21 @@ export class AudioEngine {
   }
   toggleMute() { this.setMuted(!this.muted); }
 
+  /**
+   * Try to get the context running. Worth calling on any gesture and whenever
+   * the page becomes visible again, not just once: a context belonging to a
+   * tab that was in the background when the game loaded stays suspended even
+   * after a keypress, and the browser may suspend a running one when the tab
+   * is hidden. Both leave a game that looks fine and makes no sound until
+   * something happens to wake the context — switching tabs, for instance.
+   */
   resume() {
     this.ensure();
-    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+    if (!this.ctx) return;
+    if (this.ctx.state === 'running') { this.applyLoop(); return; }
+    // resume() rejects if the browser is still not willing; try again later
+    // rather than letting the rejection escape.
+    this.ctx.resume().then(() => this.applyLoop(), () => {});
   }
 
   stopLoop() {
@@ -331,32 +344,56 @@ export class AudioEngine {
       this.loopSource.stop();
       this.loopSource = null;
     }
+    this.loopPlaying = null;
   }
 
-  setLoop(mode, sirenLevel = 0) {
-    if (this.suppressed) mode = 'none';
-    if (!this.ctx) { this.loopMode = mode; this.sirenLevel = sirenLevel; return; }
-    if (mode === this.loopMode && sirenLevel === this.sirenLevel) return;
-    this.loopMode = mode;
-    this.sirenLevel = sirenLevel;
+  /** Which buffer the current loop mode wants, or null for silence. */
+  loopKey() {
+    if (this.loopMode === 'siren') return `siren${this.sirenLevel}`;
+    if (this.loopMode === 'fright' || this.loopMode === 'eyes') return this.loopMode;
+    return null;
+  }
+
+  /**
+   * Bring the playing loop into line with the mode the game has asked for.
+   * Idempotent, because resume() calls it on every gesture and restarting the
+   * siren on each keypress would chop it up.
+   */
+  applyLoop() {
+    if (!this.live) return;
+    const key = this.loopKey();
+    if (key === this.loopPlaying) return;
     this.stopLoop();
-    let buf = null;
-    if (mode === 'siren') buf = this.buffer(`siren${sirenLevel}`, () => [progSiren(sirenLevel)]);
-    else if (mode === 'fright' || mode === 'eyes') buf = this.buffer(mode, SOUND_PROGRAMS[mode]);
-    if (!buf) return;
+    if (!key) return;
+    const build = this.loopMode === 'siren'
+      ? () => [progSiren(this.sirenLevel)]
+      : SOUND_PROGRAMS[this.loopMode];
     const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    src.buffer = this.buffer(key, build);
     src.loop = true;
     src.connect(this.master);
     src.start();
     this.loopSource = src;
+    this.loopPlaying = key;
+  }
+
+  setLoop(mode, sirenLevel = 0) {
+    if (this.suppressed) mode = 'none';
+    // Record what the game wants even when it cannot be started yet; resume()
+    // picks it up once the context is actually running.
+    this.loopMode = mode;
+    this.sirenLevel = sirenLevel;
+    this.applyLoop();
   }
 
   // Kept for the game loop's benefit: the sequencing now lives in the rendered
   // buffers, so there is nothing to advance per tick.
   update() {}
 
-  get live() { return this.ctx && !this.suppressed; }
+  // A suspended context has a stopped clock, so anything started against it
+  // is not merely inaudible — it queues up and would all fire at once when the
+  // context eventually runs. Nothing is emitted until it is genuinely running.
+  get live() { return !!this.ctx && this.ctx.state === 'running' && !this.suppressed; }
 
   waka() {
     if (!this.live) return;

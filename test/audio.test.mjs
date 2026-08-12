@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  renderProgram, unpackDump, progSiren, SOUND_PROGRAMS, WAVEFORM_CYCLES,
+  AudioEngine, renderProgram, unpackDump, progSiren, SOUND_PROGRAMS, WAVEFORM_CYCLES,
 } from '../src/audio.js';
 import { WAVETABLE, SND_PRELUDE, SND_DEAD } from '../src/romdata.js';
 
@@ -265,4 +265,82 @@ test('the waveform index wraps within one waveform', () => {
       assert.ok(WAVETABLE[index] <= 0x0f);
     }
   }
+});
+
+// --- the browser's audio clock -------------------------------------------
+//
+// A tab that was in the background when the game loaded gets an AudioContext
+// that is suspended and stays that way through the first keypress. Its clock
+// is stopped, so anything started against it is not merely inaudible: it
+// queues, and fires all at once whenever the context does start. This is what
+// "no sound until I switched tabs" was.
+
+/** Enough of an AudioContext to drive the engine's start/stop decisions. */
+function fakeContext(state = 'suspended') {
+  const started = [];
+  return {
+    state,
+    sampleRate: 44100,
+    started,
+    createBuffer: (ch, len, rate) => ({
+      length: len, sampleRate: rate, copyToChannel() {},
+    }),
+    createBufferSource() {
+      const src = { buffer: null, loop: false, connect() { return src; },
+                    start: () => started.push(src), stop() {} };
+      return src;
+    },
+  };
+}
+
+function engineWith(ctx) {
+  const engine = new AudioEngine();
+  engine.ctx = ctx;
+  engine.master = { connect() {}, gain: { value: 1 } };
+  return engine;
+}
+
+test('nothing is emitted while the audio clock is stopped', () => {
+  const ctx = fakeContext('suspended');
+  const engine = engineWith(ctx);
+  assert.equal(engine.live, false, 'a suspended context is not live');
+
+  engine.setLoop('siren', 0);
+  engine.waka();
+  engine.credit();
+  assert.equal(ctx.started.length, 0, 'sounds were queued against a stopped clock');
+  // What the game asked for is still remembered, ready for the context waking.
+  assert.equal(engine.loopMode, 'siren');
+  assert.equal(engine.loopPlaying, null);
+});
+
+test('the loop starts by itself once the context wakes up', () => {
+  const ctx = fakeContext('suspended');
+  const engine = engineWith(ctx);
+  engine.setLoop('siren', 2);
+  assert.equal(ctx.started.length, 0);
+
+  ctx.state = 'running';   // what coming back to the tab does
+  engine.applyLoop();
+  assert.equal(ctx.started.length, 1, 'the siren should start without further input');
+  assert.equal(engine.loopPlaying, 'siren2');
+  assert.equal(ctx.started[0].loop, true);
+});
+
+test('waking up repeatedly does not chop the loop into pieces', () => {
+  // resume() runs on every gesture, so restarting the loop there would cut the
+  // siren back to its beginning on every keypress.
+  const ctx = fakeContext('running');
+  const engine = engineWith(ctx);
+  engine.setLoop('siren', 0);
+  assert.equal(ctx.started.length, 1);
+  for (let i = 0; i < 10; i++) engine.applyLoop();
+  assert.equal(ctx.started.length, 1, 'the loop was restarted');
+
+  // A genuine change of mode still swaps it.
+  engine.setLoop('fright');
+  assert.equal(ctx.started.length, 2);
+  assert.equal(engine.loopPlaying, 'fright');
+  engine.setLoop('none');
+  assert.equal(engine.loopPlaying, null);
 });
