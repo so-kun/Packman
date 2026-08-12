@@ -54,6 +54,28 @@ test('rendering produces audio in range', () => {
   assert.ok(energy / samples.length > 1e-4, 'almost all silence');
 });
 
+test('the mix has headroom for everything the chip can play at once', () => {
+  // The prelude used to arrive at nearly twice full scale, because each voice
+  // was normalised to 1.0 and two of them were summed. Anything that clips
+  // here is heard as the limiter clamping down on the whole mix.
+  const flatOut = (f, w, v) => [...Array(30)].map(() => ({ f, w, v }));
+  const loudest = [flatOut(0x1000, 0, 15), flatOut(0x1400, 0, 15), flatOut(0x1800, 0, 15)];
+  for (let voices = 1; voices <= 3; voices++) {
+    const samples = renderProgram(loudest.slice(0, voices), SAMPLE_RATE);
+    let peak = 0;
+    for (const x of samples) peak = Math.max(peak, Math.abs(x));
+    assert.ok(peak <= 1, `${voices} voices at full volume peak at ${peak.toFixed(3)}`);
+  }
+  // The real tunes have to fit too.
+  for (const name of ['prelude', 'intermission', 'death']) {
+    const samples = renderProgram(SOUND_PROGRAMS[name](), SAMPLE_RATE);
+    let peak = 0;
+    for (const x of samples) peak = Math.max(peak, Math.abs(x));
+    assert.ok(peak <= 1, `${name} peaks at ${peak.toFixed(3)}`);
+    assert.ok(peak > 0.1, `${name} is too quiet at ${peak.toFixed(3)}`);
+  }
+});
+
 test('a silent program renders silence', () => {
   const samples = renderProgram([[{ f: 0, w: 0, v: 0 }]], SAMPLE_RATE);
   assert.ok(samples.every((s) => s === 0));
